@@ -91,14 +91,31 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.n2 = 1.33    # Water
         self.n3 = 1.52    # Glass (Crown)
         self.time = 0
+        self.angle_of_incidence = 0
+
+        # Define boundaries
+        self.boundary1 = 1000
+        self.boundary2 = 2000
         
+        # Add angle labels at boundaries (MOVE THIS UP)
+        self.angle1_label = pg.TextItem("θ₁: 0°", anchor=(0.5, 0), color='w')
+        self.angle1_label.setPos(self.boundary1 - 100, -1.5)
+
+        self.angle2_label = pg.TextItem("θ₂: 0°", anchor=(0.5, 0), color='w')
+        self.angle2_label.setPos(self.boundary1 + 100, -1.5)
+
+        self.angle3_label = pg.TextItem("θ₃: 0°", anchor=(0.5, 0), color='w')
+        self.angle3_label.setPos(self.boundary2 + 100, -1.5)
+
+        self.addItem(self.angle1_label)
+        self.addItem(self.angle2_label)
+        self.addItem(self.angle3_label)
+
         # Simulation mode
         self.prism_mode = False
         self.white_light = False
         
-        # Medium boundaries
-        self.boundary1 = 1000
-        self.boundary2 = 2000
+    
         
         # Set up the x-axis
         self.x = np.linspace(0, 3000, 3000)
@@ -164,10 +181,9 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.addItem(self.medium1_label)
         self.addItem(self.medium2_label)
         self.addItem(self.medium3_label)
+
         
-        # Create the wave curve for single wavelength
-        wave = self.calculate_wave(self.wavelength)
-        self.wave_curve = self.plot(self.x, wave, pen=pg.mkPen('b', width=4))
+       
         
         # For white light/prism mode - create multiple curves for different wavelengths
         self.wave_curves = []
@@ -193,6 +209,10 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_animation)
         self.timer.start(10)  # 50ms interval (20 fps)
+
+         # Create the wave curve for single wavelength
+        wave = self.calculate_wave(self.wavelength)
+        self.wave_curve = self.plot(self.x, wave, pen=pg.mkPen('b', width=4))
         
     def calculate_wave(self, wavelength):
         """Calculate the wave based on current parameters for a specific wavelength"""
@@ -213,6 +233,20 @@ class WaveSimulationWidget(pg.PlotWidget):
             # No dispersion in normal mode
             n2_wl = self.n2
             n3_wl = self.n3
+        
+        # Angle of incidence in radians
+        angle_incidence = np.radians(self.angle_of_incidence)
+        
+        # Snell's law to calculate refraction angles
+        angle_refraction1 = np.arcsin(np.sin(angle_incidence) / self.n2)
+        angle_refraction2 = np.arcsin(np.sin(angle_refraction1) * self.n2 / self.n3)
+
+
+        # Update angle labels
+        self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+        self.angle2_label.setText(f"θ₂: {np.degrees(angle_refraction1):.1f}°")
+        self.angle3_label.setText(f"θ₃: {np.degrees(angle_refraction2):.1f}°")
+
             
         # Wave parameters for each medium
         k1 = (2 * np.pi * self.n1) / wavelength  # Wave number in medium 1
@@ -223,20 +257,21 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Calculate wave in medium 1
         mask1 = self.x <= self.boundary1
-        phase1 = k1 * self.x[mask1] - omega * self.time
+        phase1 = k1 * self.x[mask1] * np.cos(angle_incidence) - omega * self.time
         wave[mask1] = self.amplitude * self.visualization_scale * np.sin(phase1)
+
+        phase_shift1 = k1 * self.boundary1 * np.cos(angle_incidence) - omega * self.time
         
         # Calculate wave in medium 2
         mask2 = (self.x > self.boundary1) & (self.x <= self.boundary2)
-        phase1_boundary = k1 * self.boundary1 - omega * self.time
-        phase2 = k2 * (self.x[mask2] - self.boundary1) - omega * self.time
+        phase2 = k2 * (self.x[mask2] - self.boundary1) * np.cos(angle_refraction1) + phase_shift1
         wave[mask2] = self.amplitude * self.visualization_scale * np.sin(phase2)
         
+        phase_shift2 = k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1) + phase_shift1
+
         # Calculate wave in medium 3
         mask3 = self.x > self.boundary2
-        phase1_boundary = k1 * self.boundary1 - omega * self.time
-        phase2_boundary = k2 * (self.boundary2 - self.boundary1)
-        phase3 = k3 * (self.x[mask3] - self.boundary2) - omega * self.time
+        phase3 = k3 * (self.x[mask3] - self.boundary2) * np.cos(angle_refraction2) + phase_shift2
         wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
         
         return wave
@@ -272,10 +307,15 @@ class WaveSimulationWidget(pg.PlotWidget):
             color = wavelength_to_rgb(self.wavelength)
             self.wave_curve.setPen(pg.mkPen(color, width=4))
 
-      
+        # Update wave curve
+        wave = self.calculate_wave(self.wavelength)
+        self.wave_curve.setData(self.x, wave)
+
     def update_wavelength(self, value):
         self.wavelength = value
         self.update_plot()
+        
+        
         
     def update_amplitude(self, value):
         self.amplitude = value
@@ -473,7 +513,7 @@ class LightSimulationApp(QMainWindow):
         self.amplitude_slider.setMinimum(1)
         self.amplitude_slider.setMaximum(10)
         self.amplitude_slider.setValue(5)
-        self.amplitude_value = QLabel("20")
+        self.amplitude_value = QLabel("5")
         
         amplitude_layout.addWidget(amplitude_label)
         amplitude_layout.addWidget(self.amplitude_slider)
@@ -494,21 +534,25 @@ class LightSimulationApp(QMainWindow):
         speed_layout.addWidget(self.speed_value)
         wave_layout.addLayout(speed_layout)
 
-        # In the setup_wave_controls method, add this code
-        zoom_layout = QHBoxLayout()
-        zoom_label = QLabel("Vertical Scale:")
-        self.zoom_slider = QSlider(Qt.Horizontal)
-        self.zoom_slider.setMinimum(1)
-        self.zoom_slider.setMaximum(20)
-        self.zoom_slider.setValue(10)  # Default value
-        self.zoom_value = QLabel("1.0x")
-        zoom_layout.addWidget(zoom_label)
-        zoom_layout.addWidget(self.zoom_slider)
-        zoom_layout.addWidget(self.zoom_value)
-        wave_layout.addLayout(zoom_layout)  # Add to the wave controls layout
+        # Angle of incidence slider
+        angle_layout = QHBoxLayout()
+        angle_label = QLabel("Angle of Incidence:")
+        self.angle_slider = QSlider(Qt.Horizontal)
+        self.angle_slider.setMinimum(0)
+        self.angle_slider.setMaximum(90)
+        self.angle_slider.setValue(0)
+        self.angle_value = QLabel("0°")
+    
+        angle_layout.addWidget(angle_label)
+        angle_layout.addWidget(self.angle_slider)
+        angle_layout.addWidget(self.angle_value)
+        wave_layout.addLayout(angle_layout)
 
-        # Connect the zoom slider to the update_zoom method
-        self.zoom_slider.valueChanged.connect(self.update_zoom)
+        # Snell's law calculations display
+        self.snells_law_label = QLabel("Snell's Law: n₁sin(θ₁) = n₂sin(θ₂)")
+        wave_layout.addWidget(self.snells_law_label)
+
+       
         
         # Simulation modes
         mode_layout = QHBoxLayout()
@@ -617,7 +661,8 @@ class LightSimulationApp(QMainWindow):
         self.wavelength_slider.valueChanged.connect(self.update_wavelength)
         self.amplitude_slider.valueChanged.connect(self.update_amplitude)
         self.speed_slider.valueChanged.connect(self.update_speed)
-        
+        self.angle_slider.valueChanged.connect(self.update_angle)
+
         self.n1_slider.valueChanged.connect(self.update_n1)
         self.n2_slider.valueChanged.connect(self.update_n2)
         self.n3_slider.valueChanged.connect(self.update_n3)
@@ -661,18 +706,30 @@ class LightSimulationApp(QMainWindow):
         n = value / 100
         self.n1_value.setText(f"{n:.4f}")
         self.wave_widget.update_n1(n)
+        self.update_snells_law()
         
     def update_n2(self, value):
         """Update refractive index of medium 2"""
         n = value / 100
         self.n2_value.setText(f"{n:.4f}")
         self.wave_widget.update_n2(n)
+        self.update_snells_law()
         
     def update_n3(self, value):
         """Update refractive index of medium 3"""
         n = value / 100
         self.n3_value.setText(f"{n:.4f}")
         self.wave_widget.update_n3(n)
+        self.update_snells_law()
+
+    def update_snells_law(self):
+        """Update Snell's law calculations display"""
+        n1 = self.wave_widget.n1
+        n2 = self.wave_widget.n2
+        angle_incidence = self.wave_widget.angle_of_incidence
+        angle_incidence_rad = np.radians(angle_incidence)
+        angle_refraction = np.degrees(np.arcsin(np.sin(angle_incidence_rad) * n1 / n2))
+        self.snells_law_label.setText(f"Snell's Law: {n1:.4f}sin({angle_incidence}°) = {n2:.4f}sin({angle_refraction:.2f}°)")
         
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
@@ -717,7 +774,13 @@ class LightSimulationApp(QMainWindow):
         self.medium1_combo.setCurrentText(medium1)
         self.medium2_combo.setCurrentText(medium2)
         self.medium3_combo.setCurrentText(medium3)
-  
+
+    def update_angle(self, value):
+        """Update angle of incidence"""
+        self.angle_value.setText(f"{value}°")
+        self.wave_widget.angle_of_incidence = value
+        self.wave_widget.update_plot()
+        self.update_snells_law()
     
 
 # Run the application
