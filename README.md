@@ -1,4 +1,4 @@
-# great
+# Animated Interactive Light RefractionVisualizer
 Interactive Light Refraction Visualizer
 
 ![image](https://github.com/user-attachments/assets/5277964b-2e0f-4f3b-92bf-b3e2c60c0158)
