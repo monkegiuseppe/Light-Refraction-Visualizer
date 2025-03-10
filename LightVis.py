@@ -73,7 +73,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.setLabel('bottom', 'Position', color='w')
         
         # Ensure background stays black regardless of parent styling
-        self.setStyleSheet("background-color: black;")
+        self.setStyleSheet("background-color: black; border: none;")
 
         # Add grid
         self.showGrid(x=True, y=True, alpha=0.3)
@@ -83,6 +83,21 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Hide the auto-range button
         self.getPlotItem().hideButtons()
         
+        # Remove the border and axis rectangle
+        self.getPlotItem().getViewBox().setBackgroundColor(None)
+        self.getPlotItem().getViewBox().setBorder(None)
+        
+        # Hide the axis box and remove borders
+        for axis in ['left', 'bottom', 'top', 'right']:
+            if self.getPlotItem().getAxis(axis):
+                self.getPlotItem().getAxis(axis).setStyle(showValues=True, tickLength=5)
+                if axis in ['top', 'right']:
+                    self.getPlotItem().showAxis(axis, False)
+        
+        # Remove the plot border
+        self.getPlotItem().setContentsMargins(0, 0, 0, 0)
+        self.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
+        self.getPlotItem().vb.setContentsMargins(0, 0, 0, 0)
 
         # Set grid line spacing
         self.getPlotItem().getAxis('left').setTicks([[(i, str(i)) for i in range(-2, 3, 1)]])
@@ -90,6 +105,10 @@ class WaveSimulationWidget(pg.PlotWidget):
 
         # Set up the x-axis
         self.x = np.linspace(0, 3000, 3000)
+
+        # Define boundaries first
+        self.boundary1 = 1000
+        self.boundary2 = 2000
 
         # Initial parameters
         self.wavelength = 550
@@ -101,14 +120,37 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.n3 = 1.52    # Glass (Crown)
         self.time = 0
         self.angle_of_incidence = 0  # Default angle is 0 (straight line)
+        
+        # Initialize flags
+        self.show_interference = False
+        self.show_ray_mode = False
+        self.white_light = False
+        self.prism_mode = False
+        
+        # Create angle labels (initialize them here to avoid errors)
+        self.angle1_label = pg.TextItem("θ₁: 0°", anchor=(0, 0), color='white')
+        self.angle2_label = pg.TextItem("θ₂: 0°", anchor=(0, 0), color='white')
+        self.angle3_label = pg.TextItem("θ₃: 0°", anchor=(0, 0), color='white')
+        self.addItem(self.angle1_label)
+        self.addItem(self.angle2_label)
+        self.addItem(self.angle3_label)
+        self.angle1_label.setPos(500, -5)
+        self.angle2_label.setPos(1500, -5)
+        self.angle3_label.setPos(2500, -5)
 
-       
-
-        # Add interference wave curves
+        # Add interference wave curves with specific colors
         self.interference_wave1 = self.plot(self.x, np.zeros_like(self.x), 
-                                          pen=pg.mkPen('r', width=2, style=Qt.DashLine))
+                                          pen=pg.mkPen('r', width=2, style=Qt.DashLine))  # Red for original wave (dashed)
         self.interference_wave2 = self.plot(self.x, np.zeros_like(self.x), 
-                                          pen=pg.mkPen('g', width=2, style=Qt.DashLine))
+                                          pen=pg.mkPen('g', width=2, style=Qt.DashLine))  # Green for difference wave (dashed)
+        
+        # Initialize interference waves with proper data
+        # Set a non-zero time to ensure waves are not straight lines
+        self.time = 2.5  # Use a larger time value for initialization
+        wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+        self.interference_wave1.setData(self.x, wave1)
+        self.interference_wave2.setData(self.x, wave2)
+        self.time = 0  # Reset time after initialization
         
         # Hide interference waves initially
         self.interference_wave1.setVisible(False)
@@ -116,7 +158,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.show_interference = False
         
         # Create ray lines to visualize refraction directions
-        self.show_ray_mode = False
         self.ray_incident = pg.PlotDataItem([], [], pen=pg.mkPen('#ffffff', width=4, style=Qt.DashLine))
         self.ray_refracted1 = pg.PlotDataItem([], [], pen=pg.mkPen('#00aaff', width=4, style=Qt.DashLine))
         self.ray_refracted2 = pg.PlotDataItem([], [], pen=pg.mkPen('#22ff22', width=4, style=Qt.DashLine))
@@ -307,20 +348,33 @@ class WaveSimulationWidget(pg.PlotWidget):
     
     def calculate_interference_waves(self, wavelength):
         """Calculate the component waves that create interference"""
-        wave = np.zeros_like(self.x)
+        # Get the actual refracted wave
+        actual_wave = self.calculate_wave(wavelength)
         
-        # Calculate incident wave continuing straight (wave1)
-        angle_incidence = np.radians(self.angle_of_incidence)
+        # Wave 1 (red) - original wave continuing straight without refraction
+        wave1 = np.zeros_like(self.x)
         k1 = (2 * np.pi * self.n1) / wavelength
         
-        # Wave 1 - incident wave continuing straight
-        wave1 = np.zeros_like(self.x)
+        # Calculate phase with time component to ensure animation
         phase1 = k1 * self.x - self.speed * self.time
-        wave1 = self.amplitude * self.visualization_scale * np.sin(phase1)
         
-        # Wave 2 - additional wave that creates interference
-        wave2 = np.zeros_like(self.x)
-        wave2 = self.calculate_wave(wavelength) - wave1
+        # In medium 1, the actual wave and the straight wave are identical
+        # (when angle of incidence is 0)
+        mask_medium1 = self.x <= self.boundary1
+        
+        # For medium 1, if angle is 0, there's no difference between actual and straight
+        if abs(self.angle_of_incidence) < 0.001:  # Practically zero
+            wave1[mask_medium1] = actual_wave[mask_medium1]
+        else:
+            # If angle is not 0, calculate the straight wave in medium 1
+            wave1[mask_medium1] = self.amplitude * self.visualization_scale * np.sin(phase1[mask_medium1])
+        
+        # For medium 2 and 3, calculate the straight wave as if it continued from medium 1
+        mask_medium23 = self.x > self.boundary1
+        wave1[mask_medium23] = self.amplitude * self.visualization_scale * np.sin(phase1[mask_medium23])
+        
+        # Wave 2 (green) - the difference between actual wave and original wave
+        wave2 = actual_wave - wave1
         
         return wave1, wave2
         
@@ -353,11 +407,11 @@ class WaveSimulationWidget(pg.PlotWidget):
         angle_refraction1 = np.arcsin(np.sin(angle_incidence) / self.n2)
         angle_refraction2 = np.arcsin(np.sin(angle_refraction1) * self.n2 / self.n3)
 
-
-        # Update angle labels
-        self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
-        self.angle2_label.setText(f"θ₂: {np.degrees(angle_refraction1):.1f}°")
-        self.angle3_label.setText(f"θ₃: {np.degrees(angle_refraction2):.1f}°")
+        # Update angle labels if they exist
+        if hasattr(self, 'angle1_label') and hasattr(self, 'angle2_label') and hasattr(self, 'angle3_label'):
+            self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+            self.angle2_label.setText(f"θ₂: {np.degrees(angle_refraction1):.1f}°")
+            self.angle3_label.setText(f"θ₃: {np.degrees(angle_refraction2):.1f}°")
 
             
         # Wave parameters for each medium
@@ -398,76 +452,111 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.time += 0.01
     
         if self.white_light:
-        # Update multiple waves with different wavelengths
+            # Update multiple waves with different wavelengths
             for wl, curve in self.wave_curves:
                 wave = self.calculate_wave(wl)
                 curve.setData(self.x, wave)
-            
-            if self.show_interference:
-                wave1, wave2 = self.calculate_interference_waves(wl)
-                self.interference_wave1.setData(self.x, wave1)
-                self.interference_wave2.setData(self.x, wave2)
-                
-            
         else:
-        # Update single wave
+            # Update single wave
             wave = self.calculate_wave(self.wavelength)
             self.wave_curve.setData(self.x, wave)
         
+        # Update interference waves if enabled
         if self.show_interference:
+            # Always recalculate interference waves to ensure they're animated properly
             wave1, wave2 = self.calculate_interference_waves(self.wavelength)
             self.interference_wave1.setData(self.x, wave1)
             self.interference_wave2.setData(self.x, wave2)
             
-        
-
+            # Ensure they're visible (in case they were toggled on but not showing)
+            if not self.interference_wave1.isVisible() or not self.interference_wave2.isVisible():
+                self.interference_wave1.setVisible(True)
+                self.interference_wave2.setVisible(True)
 
     def toggle_interference(self, enabled):
         """Toggle visibility of interference waves"""
         self.show_interference = enabled
-        self.interference_wave1.setVisible(enabled)
-        self.interference_wave2.setVisible(enabled)
         
+        if enabled:
+            # Force a significant time update to ensure waves are animated
+            old_time = self.time
+            self.time += 2.5  # Add a significant time offset
+            
+            # Force recalculation with the new time
+            wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+            
+            # Update the interference waves
+            self.interference_wave1.setData(self.x, wave1)
+            self.interference_wave2.setData(self.x, wave2)
+            
+            # Make them visible
+            self.interference_wave1.setVisible(True)
+            self.interference_wave2.setVisible(True)
+            
+            # Reset time to original plus a small increment to keep animation flowing
+            self.time = old_time + 0.1
+        else:
+            # Hide interference waves when disabled
+            self.interference_wave1.setVisible(False)
+            self.interference_wave2.setVisible(False)
+
     def update_plot(self):
-        """Update the plot with current medium boundaries and colors"""
+        """Update the plot with current parameters"""
         try:
-            # Store current y range before updating
+            # Store current y range to restore after updates
             y_range = self.getViewBox().viewRange()[1]
             
-            # Clear previous medium backgrounds
+            # Clear existing medium rectangles and labels
             for rect in self.medium_rects:
                 self.removeItem(rect)
             self.medium_rects = []
             
-            # Get plot dimensions for better sizing
-            plot_height = 20  # Fixed height for visual clarity
+            for label_pair in self.medium_labels:
+                for label in label_pair[0:2]:
+                    self.removeItem(label)
+            self.medium_labels = []
             
-            # Create new medium backgrounds with proper colors
-            # Medium 1 (left)
-            rect1 = pg.QtGui.QGraphicsRectItem(0, -plot_height/2, self.boundary1, plot_height)
-            rect1.setBrush(pg.mkBrush(self.medium1_color))
-            rect1.setOpacity(0.4)  # More visible
-            rect1.setPen(pg.mkPen(None))  # No border
-            self.addItem(rect1)
-            self.medium_rects.append(rect1)
+            # Create medium rectangles using PyQtGraph's built-in rectangle
+            # Medium 1
+            medium1_rect = pg.PlotCurveItem(
+                x=[0, 0, self.boundary1, self.boundary1, 0],
+                y=[-10, 10, 10, -10, -10],
+                fillLevel=0,
+                fillBrush=pg.mkBrush(self.medium1_color),
+                pen=pg.mkPen(None)
+            )
+            self.addItem(medium1_rect)
+            self.medium_rects.append(medium1_rect)
             
-            # Medium 2 (middle)
-            rect2 = pg.QtGui.QGraphicsRectItem(self.boundary1, -plot_height/2, 
-                                            self.boundary2 - self.boundary1, plot_height)
-            rect2.setBrush(pg.mkBrush(self.medium2_color))
-            rect2.setOpacity(0.4)
-            rect2.setPen(pg.mkPen(None))
-            self.addItem(rect2)
-            self.medium_rects.append(rect2)
+            # Medium 2
+            medium2_rect = pg.PlotCurveItem(
+                x=[self.boundary1, self.boundary1, self.boundary2, self.boundary2, self.boundary1],
+                y=[-10, 10, 10, -10, -10],
+                fillLevel=0,
+                fillBrush=pg.mkBrush(self.medium2_color),
+                pen=pg.mkPen(None)
+            )
+            self.addItem(medium2_rect)
+            self.medium_rects.append(medium2_rect)
             
-            # Medium 3 (right)
-            rect3 = pg.QtGui.QGraphicsRectItem(self.boundary2, -plot_height/2, 
-                                            3000 - self.boundary2, plot_height)
-            rect3.setBrush(pg.mkBrush(self.medium3_color))
-            rect3.setOpacity(0.4)
-            rect3.setPen(pg.mkPen(None))
-            self.addItem(rect3)
-            self.medium_rects.append(rect3)
+            # Medium 3
+            medium3_rect = pg.PlotCurveItem(
+                x=[self.boundary2, self.boundary2, 3000, 3000, self.boundary2],
+                y=[-10, 10, 10, -10, -10],
+                fillLevel=0,
+                fillBrush=pg.mkBrush(self.medium3_color),
+                pen=pg.mkPen(None)
+            )
+            self.addItem(medium3_rect)
+            self.medium_rects.append(medium3_rect)
+            
+            # Add boundary lines
+            boundary1_line = pg.InfiniteLine(pos=self.boundary1, angle=90, pen=pg.mkPen('w', width=2, style=Qt.DashLine))
+            boundary2_line = pg.InfiniteLine(pos=self.boundary2, angle=90, pen=pg.mkPen('w', width=2, style=Qt.DashLine))
+            self.addItem(boundary1_line)
+            self.addItem(boundary2_line)
+            self.medium_rects.append(boundary1_line)
+            self.medium_rects.append(boundary2_line)
             
             # Update medium labels
             for i, (color, name, index) in enumerate(self.medium_labels):
@@ -526,13 +615,6 @@ class WaveSimulationWidget(pg.PlotWidget):
                         curve.setPen(pg.mkPen(QColor(r, g, b), width=2))
                         wave = self.calculate_wave(wl)
                         curve.setData(self.x, wave)
-            
-            # Update interference waves if enabled
-            if self.show_interference:
-                if not self.white_light:
-                    waves = self.calculate_interference_waves(self.wavelength)
-                    self.interference_wave1.setData(self.x, waves[0])
-                    self.interference_wave2.setData(self.x, waves[1])
             
             # Update ray lines if ray mode is enabled
             if self.show_ray_mode:
@@ -615,30 +697,33 @@ class WaveSimulationWidget(pg.PlotWidget):
         
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
-        n = self.medium_presets[medium_name]['n']
-        self.n1_slider.setValue(int(n * 100))
-        self.n1_value.setText(f"{n:.4f}")
-        
-        # Update the wave widget
-        self.wave_widget.update_medium1(medium_name)
+        if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
+            n = self.medium_presets[medium_name]['n']
+            self.n1_slider.setValue(int(n * 100))
+            self.n1_value.setText(f"{n:.4f}")
+            
+            # Update the wave widget
+            self.wave_widget.update_medium1(medium_name)
         
     def update_medium2(self, medium_name):
         """Update medium 2 selection"""
-        n = self.medium_presets[medium_name]['n']
-        self.n2_slider.setValue(int(n * 100))
-        self.n2_value.setText(f"{n:.4f}")
-        
-        # Update the wave widget
-        self.wave_widget.update_medium2(medium_name)
+        if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
+            n = self.medium_presets[medium_name]['n']
+            self.n2_slider.setValue(int(n * 100))
+            self.n2_value.setText(f"{n:.4f}")
+            
+            # Update the wave widget
+            self.wave_widget.update_medium2(medium_name)
         
     def update_medium3(self, medium_name):
         """Update medium 3 selection"""
-        n = self.medium_presets[medium_name]['n']
-        self.n3_slider.setValue(int(n * 100))
-        self.n3_value.setText(f"{n:.4f}")
-        
-        # Update the wave widget
-        self.wave_widget.update_medium3(medium_name)
+        if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
+            n = self.medium_presets[medium_name]['n']
+            self.n3_slider.setValue(int(n * 100))
+            self.n3_value.setText(f"{n:.4f}")
+            
+            # Update the wave widget
+            self.wave_widget.update_medium3(medium_name)
         
     def toggle_prism_mode(self, enabled):
         """Toggle between normal and prism simulation mode"""
@@ -951,124 +1036,10 @@ class LightSimulationApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        self.setWindowTitle("Light Wave Refraction Simulation")
+        # Set up the main window
+        self.setWindowTitle("Light Wave Simulation")
         self.setGeometry(100, 100, 1200, 800)
         
-        # Set dark mode stylesheet
-        self.setStyleSheet("""
-        QMainWindow {
-            background-color: #2b2b2b;
-            font-family: 'Foto';
-        }
-        QWidget {
-            background-color: #2b2b2b;
-            color: #ffffff;
-            font-family: 'Foto';
-        }
-        /* Exception for plot widgets */
-        QGraphicsView, PlotWidget, PyQtGraph {
-            background-color: transparent;
-        }
-        QGroupBox {
-            border: 1px solid #444444;
-            border-radius: 4px;
-            margin-top: 14px;
-            padding-top: 12px;
-            font-family: 'Foto';
-            font-size: 12px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            subcontrol-position: top left;
-            padding: 0 6px;
-            color: #ffffff;
-            font-family: 'Foto';
-            font-weight: bold;
-        }
-        QLabel {
-            color: #ffffff;
-            font-family: 'Foto';
-            padding: 2px;
-            font-size: 12px;
-        }
-        QSlider {
-            background-color: transparent;
-        }
-        QSlider::handle {
-            background-color: #ffffff;
-        }
-        QComboBox {
-            color: #ffffff;
-            background-color: #3c3c3c;
-            selection-background-color: #505050;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 4px 8px;
-            min-height: 20px;
-            font-family: 'Foto';
-        }
-        QComboBox:hover {
-            border: 1px solid #777777;
-            background-color: #454545;
-        }
-        QComboBox::drop-down {
-            subcontrol-origin: padding;
-            subcontrol-position: top right;
-            width: 20px;
-            border-left: 1px solid #555555;
-            border-top-right-radius: 3px;
-            border-bottom-right-radius: 3px;
-        }
-        QComboBox::down-arrow {
-            image: none;
-            width: 0;
-            height: 0;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 5px solid #bbbbbb;
-            margin-right: 6px;
-        }
-        QComboBox QAbstractItemView {
-            border: 1px solid #555555;
-            background-color: #3c3c3c;
-            selection-background-color: #0088ff;
-            selection-color: white;
-            border-radius: 3px;
-            padding: 2px;
-        }
-        QPushButton {
-            color: #ffffff;
-            background-color: #3c3c3c;
-            border: 1px solid #555555;
-            border-radius: 3px;
-            padding: 6px 12px;
-            font-family: 'Foto';
-        }
-        QPushButton:hover {
-            background-color: #454545;
-            border: 1px solid #777777;
-        }
-        QPushButton:pressed {
-            background-color: #505050;
-        }
-        QCheckBox {
-            spacing: 6px;
-            color: #ffffff;
-            font-family: 'Foto';
-        }
-        QCheckBox::indicator {
-            width: 16px;
-            height: 16px;
-            border: 1px solid #555555;
-            border-radius: 2px;
-            background-color: #3c3c3c;
-        }
-        QCheckBox::indicator:checked {
-            background-color: #0088ff;
-            border: 1px solid #0088ff;
-        }
-        """)
-
         # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
             'Air': {'n': 1.0003, 'color': '#222233'},
@@ -1092,57 +1063,114 @@ class LightSimulationApp(QMainWindow):
             'Glass → Air → Water': ('Glass (Crown)', 'Air', 'Water')
         }
         
-        # Create the main widget and layout
-        self.main_widget = QWidget()
-        self.setCentralWidget(self.main_widget)
+        # Create a color indicator for wavelength (we'll hide this)
+        self.wavelength_color_indicator = QFrame()
+        self.wavelength_color_indicator.setFixedSize(0, 0)  # Set to zero size to hide it
+        self.wavelength_color_indicator.setFrameShape(QFrame.NoFrame)
+        self.wavelength_color_indicator.setStyleSheet("background-color: transparent;")
         
-        # Main vertical layout
-        self.main_layout = QVBoxLayout()
-        self.main_layout.setSpacing(0)
-        self.main_widget.setLayout(self.main_layout)
+        # Set dark mode stylesheet
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background-color: #2D2D30;
+                color: #FFFFFF;
+            }
+            QGroupBox {
+                border: 1px solid #3F3F46;
+                border-radius: 5px;
+                margin-top: 10px;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+            }
+            QPushButton {
+                background-color: #007ACC;
+                border: none;
+                border-radius: 3px;
+                padding: 5px;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #1C97EA;
+            }
+            QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+                background-color: #333337;
+                border: 1px solid #3F3F46;
+                border-radius: 3px;
+                padding: 2px;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #999999;
+                height: 8px;
+                background: #333337;
+                margin: 2px 0;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #007ACC;
+                border: 1px solid #5c5c5c;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 3px;
+            }
+        """)
         
-        # Create the wave visualization
+        # Create central widget and main layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        self.main_layout = QVBoxLayout(central_widget)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
+        self.main_layout.setSpacing(0)  # Remove spacing
+        
+        # Create wave widget directly (no tabs)
         self.wave_widget = WaveSimulationWidget()
-        self.main_layout.addWidget(self.wave_widget, stretch=1)
-
-        # Create and add controls
-        controls_container = QWidget()
-        controls_container.setMaximumHeight(200)
-        controls_container.setMinimumHeight(200)
-        controls_layout = QHBoxLayout()
-        controls_container.setLayout(controls_layout)
-
-
+        self.main_layout.addWidget(self.wave_widget)
         
+        # Share medium presets with the wave widget
+        self.wave_widget.medium_presets = self.medium_presets
+        
+        # Create controls container
+        controls_container = QWidget()
+        controls_container.setMaximumHeight(200)  # Limit height
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(10, 10, 10, 10)  # Add some padding
+        controls_layout.setSpacing(10)  # Add spacing between controls
+        controls_container.setLayout(controls_layout)
+        self.main_layout.addWidget(controls_container)
         
         # Add wave controls
         self.setup_wave_controls(controls_layout)
-        
-        self.main_layout.addWidget(controls_container)
-    
-    def setup_wave_controls(self,controls_layout):
-        """Set up the control panel for wave simulation"""
-        
-        
+
+    def setup_wave_controls(self, layout):
         # Left controls group (wave properties)
-        wave_group = QGroupBox("Wave Properties")
+        wave_group = QGroupBox("Wavelength")
         wave_layout = QVBoxLayout()
-        wave_group.setLayout(wave_layout)
-        controls_layout.addWidget(wave_group)
         
-        # Wavelength slider
-        wavelength_layout = QHBoxLayout()
-        wavelength_label = QLabel("Wavelength:")
-        self.wavelength_slider = ColoredSlider()  # Use the custom slider
+        wavelength_slider_layout = QHBoxLayout()
+        wavelength_slider_layout.addWidget(QLabel("Wavelength:"))
+        self.wavelength_slider = ColoredSlider()
+        self.wavelength_slider.setOrientation(Qt.Horizontal)
         self.wavelength_slider.setMinimum(380)
         self.wavelength_slider.setMaximum(750)
         self.wavelength_slider.setValue(550)
-        self.wavelength_value = QLabel("550 nm")
+        self.wavelength_slider.setTickPosition(QSlider.TicksBelow)
+        self.wavelength_slider.setTickInterval(50)
+        self.wavelength_slider.valueChanged.connect(self.update_wavelength)
+        wavelength_slider_layout.addWidget(self.wavelength_slider)
         
-        wavelength_layout.addWidget(wavelength_label)
-        wavelength_layout.addWidget(self.wavelength_slider)
-        wavelength_layout.addWidget(self.wavelength_value)
-        wave_layout.addLayout(wavelength_layout)
+        # Simplified wavelength value display (no color indicator)
+        wavelength_value_layout = QHBoxLayout()
+        self.wavelength_value_label = QLabel("550 nm")
+        wavelength_value_layout.addWidget(self.wavelength_value_label)
+        wavelength_value_layout.addStretch()
+        
+        wave_layout.addLayout(wavelength_slider_layout)
+        wave_layout.addLayout(wavelength_value_layout)
+        wave_group.setLayout(wave_layout)
+        layout.addWidget(wave_group)
         
         # Amplitude slider
         amplitude_layout = QHBoxLayout()
@@ -1186,24 +1214,29 @@ class LightSimulationApp(QMainWindow):
         angle_layout.addWidget(self.angle_value)
         wave_layout.addLayout(angle_layout)
 
-
         # Add interference mode checkbox next to other mode controls
         mode_layout = QHBoxLayout()
         self.white_light_check = QCheckBox("White Light")
         self.interference_check = QCheckBox("Show Interference")
+        self.interference_check.setChecked(False)  # Set unchecked by default
         self.ray_mode_check = QCheckBox("Show Ray Path")
-
+        
         mode_layout.addWidget(self.white_light_check)
         mode_layout.addWidget(self.interference_check)
         mode_layout.addWidget(self.ray_mode_check)
         wave_layout.addLayout(mode_layout)
         
         
+        
+        
+        
+        
+        
         # Middle group (medium 1)
         medium1_group = QGroupBox("Medium 1")
         medium1_layout = QVBoxLayout()
         medium1_group.setLayout(medium1_layout)
-        controls_layout.addWidget(medium1_group)
+        layout.addWidget(medium1_group)
         
         # Medium 1 selection
         self.medium1_combo = QComboBox()
@@ -1229,7 +1262,7 @@ class LightSimulationApp(QMainWindow):
         medium2_group = QGroupBox("Medium 2")
         medium2_layout = QVBoxLayout()
         medium2_group.setLayout(medium2_layout)
-        controls_layout.addWidget(medium2_group)
+        layout.addWidget(medium2_group)
         
         # Medium 2 selection
         self.medium2_combo = QComboBox()
@@ -1255,7 +1288,7 @@ class LightSimulationApp(QMainWindow):
         medium3_group = QGroupBox("Medium 3")
         medium3_layout = QVBoxLayout()
         medium3_group.setLayout(medium3_layout)
-        controls_layout.addWidget(medium3_group)
+        layout.addWidget(medium3_group)
         
         # Medium 3 selection
         self.medium3_combo = QComboBox()
@@ -1282,7 +1315,7 @@ class LightSimulationApp(QMainWindow):
         scenario_group = QGroupBox("Presets")
         scenario_layout = QVBoxLayout()
         scenario_group.setLayout(scenario_layout)
-        controls_layout.addWidget(scenario_group)
+        layout.addWidget(scenario_group)
         
         self.scenario_combo = QComboBox()
         for scenario in self.scenario_materials.keys():
@@ -1315,37 +1348,28 @@ class LightSimulationApp(QMainWindow):
         
         self.ray_mode_check.stateChanged.connect(self.toggle_ray_mode)
 
-
     def toggle_interference(self, state):
         """Toggle interference visualization"""
         enabled = state == Qt.Checked
+        
+        # Toggle interference in the wave widget
         self.wave_widget.toggle_interference(enabled)
-    
-
-    
-    
-    def on_tab_changed(self, index):
-        """Handle tab change event"""
-        # Pause/resume appropriate timers based on visible tab
-        if index == 0:  # Wave tab
-            self.wave_widget.timer.start(50)
-        else:
-            self.wave_widget.timer.stop()
-            
-    # --- Wave Control Event Handlers ---
+        
+        # Force an immediate update to ensure proper display
+        if enabled:
+            # Update the wave widget immediately
+            self.wave_widget.update_animation()
+        
     def update_wavelength(self, value):
         """Update wavelength value"""
         # Update displayed value
         nm_value = value
-        self.wavelength_value.setText(f"{nm_value} nm")
+        self.wavelength_value_label.setText(f"{nm_value} nm")
         
         # Update widget
         self.wave_widget.update_wavelength(value)
         
-        # Update color indicator on slider
-        r, g, b = wavelength_to_rgb(value)
-        color_style = f"background-color: rgb({r},{g},{b});"
-        self.wavelength_color_indicator.setStyleSheet(color_style)
+        # We're not updating the color indicator anymore since it's hidden
         
     def update_amplitude(self, value):
         """Update amplitude value"""
@@ -1382,30 +1406,33 @@ class LightSimulationApp(QMainWindow):
         
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
-        n = self.medium_presets[medium_name]['n']
-        self.n1_slider.setValue(int(n * 100))
-        self.n1_value.setText(f"{n:.4f}")
-        
-        # Update the wave widget
-        self.wave_widget.update_medium1(medium_name)
+        if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
+            n = self.medium_presets[medium_name]['n']
+            self.n1_slider.setValue(int(n * 100))
+            self.n1_value.setText(f"{n:.4f}")
+            
+            # Update the wave widget
+            self.wave_widget.update_medium1(medium_name)
         
     def update_medium2(self, medium_name):
         """Update medium 2 selection"""
-        n = self.medium_presets[medium_name]['n']
-        self.n2_slider.setValue(int(n * 100))
-        self.n2_value.setText(f"{n:.4f}")
-        
-        # Update the wave widget
-        self.wave_widget.update_medium2(medium_name)
+        if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
+            n = self.medium_presets[medium_name]['n']
+            self.n2_slider.setValue(int(n * 100))
+            self.n2_value.setText(f"{n:.4f}")
+            
+            # Update the wave widget
+            self.wave_widget.update_medium2(medium_name)
         
     def update_medium3(self, medium_name):
         """Update medium 3 selection"""
-        n = self.medium_presets[medium_name]['n']
-        self.n3_slider.setValue(int(n * 100))
-        self.n3_value.setText(f"{n:.4f}")
-        
-        # Update the wave widget
-        self.wave_widget.update_medium3(medium_name)
+        if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
+            n = self.medium_presets[medium_name]['n']
+            self.n3_slider.setValue(int(n * 100))
+            self.n3_value.setText(f"{n:.4f}")
+            
+            # Update the wave widget
+            self.wave_widget.update_medium3(medium_name)
         
     def toggle_white_light(self, state):
         """Toggle white light mode"""
@@ -1413,18 +1440,32 @@ class LightSimulationApp(QMainWindow):
         self.wave_widget.toggle_white_light(enabled)
         
     def apply_scenario(self):
-        """Apply selected scenario preset"""
-        scenario = self.scenario_combo.currentText()
-        medium1, medium2, medium3 = self.scenario_materials[scenario]
+        """Apply the selected scenario preset"""
+        scenario_name = self.scenario_combo.currentText()
+        if scenario_name in self.scenario_materials and hasattr(self, 'medium_presets'):
+            medium1, medium2, medium3 = self.scenario_materials[scenario_name]
+            
+            # Update medium selections
+            self.medium1_combo.setCurrentText(medium1)
+            self.medium2_combo.setCurrentText(medium2)
+            self.medium3_combo.setCurrentText(medium3)
+            
+            # Update refractive indices
+            if medium1 in self.medium_presets:
+                n1 = self.medium_presets[medium1]['n']
+                self.n1_slider.setValue(int(n1 * 100))
+                self.n1_value.setText(f"{n1:.4f}")
+            
+            if medium2 in self.medium_presets:
+                n2 = self.medium_presets[medium2]['n']
+                self.n2_slider.setValue(int(n2 * 100))
+                self.n2_value.setText(f"{n2:.4f}")
+            
+            if medium3 in self.medium_presets:
+                n3 = self.medium_presets[medium3]['n']
+                self.n3_slider.setValue(int(n3 * 100))
+                self.n3_value.setText(f"{n3:.4f}")
         
-        self.medium1_combo.setCurrentText(medium1)
-        self.medium2_combo.setCurrentText(medium2)
-        self.medium3_combo.setCurrentText(medium3)
-
-        n1 = self.medium_presets[medium1]['n']
-        n2 = self.medium_presets[medium2]['n']
-        n3 = self.medium_presets[medium3]['n']
-
     def update_angle(self, value):
         """Update the angle of incidence"""
         # Update label
