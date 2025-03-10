@@ -400,13 +400,25 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Angle of incidence in radians
         angle_incidence = np.radians(self.angle_of_incidence)
-        angle_refraction1 = np.arcsin(np.sin(angle_incidence) * self.n1 / n2_wl)
-        angle_refraction2 = np.arcsin(np.sin(angle_refraction1) * n2_wl / n3_wl)
         
-        # Snell's law to calculate refraction angles
-        angle_refraction1 = np.arcsin(np.sin(angle_incidence) / self.n2)
-        angle_refraction2 = np.arcsin(np.sin(angle_refraction1) * self.n2 / self.n3)
-
+        # Add safety checks for total internal reflection
+        sin_refraction1 = np.sin(angle_incidence) * self.n1 / n2_wl
+        if abs(sin_refraction1) > 1:
+            # Total internal reflection at first boundary
+            angle_refraction1 = np.pi/2  # Set to 90 degrees
+            angle_refraction2 = np.pi/2  # Set to 90 degrees
+            total_reflection = True
+        else:
+            angle_refraction1 = np.arcsin(sin_refraction1)
+            sin_refraction2 = np.sin(angle_refraction1) * n2_wl / n3_wl
+            if abs(sin_refraction2) > 1:
+                # Total internal reflection at second boundary
+                angle_refraction2 = np.pi/2  # Set to 90 degrees
+                total_reflection = True
+            else:
+                angle_refraction2 = np.arcsin(sin_refraction2)
+                total_reflection = False
+                
         # Update angle labels if they exist
         if hasattr(self, 'angle1_label') and hasattr(self, 'angle2_label') and hasattr(self, 'angle3_label'):
             self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
@@ -433,17 +445,42 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Calculate wave in medium 2 with angular propagation
         mask2 = (self.x > self.boundary1) & (self.x <= self.boundary2)
         x2 = self.x[mask2] - self.boundary1
-        phase2 = (k2 * (x2 * np.cos(angle_refraction1) + y[mask2] * np.sin(angle_refraction1)) + 
-              k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+        
+        # Handle differently based on whether we have total internal reflection
+        if 'total_reflection' in locals() and total_reflection and sin_refraction1 > 1:
+            # For total internal reflection at first boundary, create reflected wave
+            reflected_angle = np.pi - angle_incidence
+            phase2 = (k1 * (x2 * np.cos(reflected_angle) + y[mask2] * np.sin(reflected_angle)) + 
+                  k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+        else:
+            # Normal refraction
+            phase2 = (k2 * (x2 * np.cos(angle_refraction1) + y[mask2] * np.sin(angle_refraction1)) + 
+                  k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+                  
         wave[mask2] = self.amplitude * self.visualization_scale * np.sin(phase2)
-
+        
         # Calculate wave in medium 3 with angular propagation
         mask3 = self.x > self.boundary2
         x3 = self.x[mask3] - self.boundary2
-        phase3 = (k3 * (x3 * np.cos(angle_refraction2) + y[mask3] * np.sin(angle_refraction2)) +
-              k1 * self.boundary1 * np.cos(angle_incidence) +
-              k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1)) - self.speed * self.time
-        wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
+        
+        # Handle differently based on whether we have total internal reflection
+        if 'total_reflection' in locals() and total_reflection:
+            if sin_refraction1 > 1:
+                # Total reflection at first boundary means no wave in medium 3
+                wave[mask3] = 0
+            elif sin_refraction2 > 1:
+                # Total reflection at second boundary
+                reflected_angle = np.pi - angle_refraction1
+                phase3 = (k2 * (x3 * np.cos(reflected_angle) + y[mask3] * np.sin(reflected_angle)) + 
+                      k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1) +
+                      k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+                wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
+        else:
+            # Normal refraction to medium 3
+            phase3 = (k3 * (x3 * np.cos(angle_refraction2) + y[mask3] * np.sin(angle_refraction2)) + 
+                  k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1) +
+                  k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+            wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
         
         return wave
         
@@ -523,8 +560,7 @@ class WaveSimulationWidget(pg.PlotWidget):
                 y=[-10, 10, 10, -10, -10],
                 fillLevel=0,
                 fillBrush=pg.mkBrush(self.medium1_color),
-                pen=pg.mkPen(None)
-            )
+                pen=pg.mkPen(None))
             self.addItem(medium1_rect)
             self.medium_rects.append(medium1_rect)
             
@@ -534,19 +570,17 @@ class WaveSimulationWidget(pg.PlotWidget):
                 y=[-10, 10, 10, -10, -10],
                 fillLevel=0,
                 fillBrush=pg.mkBrush(self.medium2_color),
-                pen=pg.mkPen(None)
-            )
+                pen=pg.mkPen(None))
             self.addItem(medium2_rect)
             self.medium_rects.append(medium2_rect)
             
             # Medium 3
             medium3_rect = pg.PlotCurveItem(
-                x=[self.boundary2, self.boundary2, 3000, 3000, self.boundary2],
+                x=[self.boundary2, self.boundary2, 10, 10, self.boundary2],
                 y=[-10, 10, 10, -10, -10],
                 fillLevel=0,
                 fillBrush=pg.mkBrush(self.medium3_color),
-                pen=pg.mkPen(None)
-            )
+                pen=pg.mkPen(None))
             self.addItem(medium3_rect)
             self.medium_rects.append(medium3_rect)
             
@@ -625,6 +659,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             
         except Exception as e:
             print(f"Error in update_plot: {e}")
+            return
 
     def toggle_ray_mode(self, enabled):
         """Toggle ray visualization mode"""
@@ -1225,6 +1260,10 @@ class LightSimulationApp(QMainWindow):
         mode_layout.addWidget(self.interference_check)
         mode_layout.addWidget(self.ray_mode_check)
         wave_layout.addLayout(mode_layout)
+        
+        
+        
+        
         
         
         
