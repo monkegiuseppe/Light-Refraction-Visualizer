@@ -100,7 +100,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.n2 = 1.33    # Water
         self.n3 = 1.52    # Glass (Crown)
         self.time = 0
-        self.angle_of_incidence = 0
+        self.angle_of_incidence = 0  # Default angle is 0 (straight line)
 
        
 
@@ -115,6 +115,27 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.interference_wave2.setVisible(False)
         self.show_interference = False
         
+        # Create ray lines to visualize refraction directions
+        self.show_ray_mode = False
+        self.ray_incident = pg.PlotDataItem([], [], pen=pg.mkPen('#ffffff', width=4, style=Qt.DashLine))
+        self.ray_refracted1 = pg.PlotDataItem([], [], pen=pg.mkPen('#00aaff', width=4, style=Qt.DashLine))
+        self.ray_refracted2 = pg.PlotDataItem([], [], pen=pg.mkPen('#22ff22', width=4, style=Qt.DashLine))
+        
+        # Add reflection markers
+        self.reflection_marker1 = pg.ScatterPlotItem(size=12, brush='y', symbol='o')
+        self.reflection_marker2 = pg.ScatterPlotItem(size=12, brush='y', symbol='o')
+        
+        # Add ray lines to plot but keep them hidden initially
+        self.addItem(self.ray_incident)
+        self.addItem(self.ray_refracted1)
+        self.addItem(self.ray_refracted2)
+        self.addItem(self.reflection_marker1)
+        self.addItem(self.reflection_marker2)
+        self.ray_incident.setVisible(False)
+        self.ray_refracted1.setVisible(False)
+        self.ray_refracted2.setVisible(False)
+        self.reflection_marker1.setVisible(False)
+        self.reflection_marker2.setVisible(False)
 
         # Define boundaries
         self.boundary1 = 1000
@@ -247,8 +268,42 @@ class WaveSimulationWidget(pg.PlotWidget):
 
          # Create the wave curve for single wavelength
         wave = self.calculate_wave(self.wavelength)
-        self.wave_curve = self.plot(self.x, wave, pen=pg.mkPen('b', width=4))
+        # Use wavelength_to_rgb to set the initial color based on self.wavelength
+        r, g, b = wavelength_to_rgb(self.wavelength)
+        wave_color = QColor(r, g, b)
+        self.wave_curve = self.plot(self.x, wave, pen=pg.mkPen(wave_color, width=4))
 
+        # Medium setup
+        self.boundary1 = 1000
+        self.boundary2 = 2000
+        
+        # Initialize medium properties
+        self.n1 = 1.0
+        self.n2 = 1.0
+        self.n3 = 1.0
+        
+        # Initialize medium colors with default values
+        self.medium1_color = '#222233'  # Dark blue-gray
+        self.medium2_color = '#223344'  # Medium blue-gray
+        self.medium3_color = '#334455'  # Light blue-gray
+        
+        # Initialize containers for medium visualization
+        self.medium_rects = []  # Store rectangle items for medium backgrounds
+        self.medium_labels = []  # Store labels for media
+        
+        # Initialize medium presets
+        self.medium_presets = {
+            'Air': {'n': 1.0003, 'color': '#222233'},
+            'Water': {'n': 1.33, 'color': '#2244AA'},
+            'Glass (Crown)': {'n': 1.52, 'color': '#445566'},
+            'Glass (Flint)': {'n': 1.62, 'color': '#556677'},
+            'Diamond': {'n': 2.42, 'color': '#778899'},
+            'Acrylic': {'n': 1.49, 'color': '#223355'},
+            'Glycerine': {'n': 1.47, 'color': '#336699'},
+            'Ethanol': {'n': 1.36, 'color': '#3377AA'},
+            'Quartz': {'n': 1.54, 'color': '#667788'},
+            'Sapphire': {'n': 1.77, 'color': '#5566AA'}
+        }
     
     def calculate_interference_waves(self, wavelength):
         """Calculate the component waves that create interference"""
@@ -374,43 +429,174 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.interference_wave2.setVisible(enabled)
         
     def update_plot(self):
-        """Update the plot with current parameters"""
-        # Update medium labels
-        self.medium1_label.setText(f"{self.current_medium1} (n₁ = {self.n1:.4f})")
-        self.medium2_label.setText(f"{self.current_medium2} (n₂ = {self.n2:.4f})")
-        self.medium3_label.setText(f"{self.current_medium3} (n₃ = {self.n3:.4f})")
-        
-        # Update medium colors
-        self.medium1_region.setBrush(QBrush(QColor(*self.medium_colors[self.current_medium1])))
-        self.medium2_region.setBrush(QBrush(QColor(*self.medium_colors[self.current_medium2])))
-        self.medium3_region.setBrush(QBrush(QColor(*self.medium_colors[self.current_medium3])))
+        """Update the plot with current medium boundaries and colors"""
+        try:
+            # Store current y range before updating
+            y_range = self.getViewBox().viewRange()[1]
+            
+            # Clear previous medium backgrounds
+            for rect in self.medium_rects:
+                self.removeItem(rect)
+            self.medium_rects = []
+            
+            # Get plot dimensions for better sizing
+            plot_height = 20  # Fixed height for visual clarity
+            
+            # Create new medium backgrounds with proper colors
+            # Medium 1 (left)
+            rect1 = pg.QtGui.QGraphicsRectItem(0, -plot_height/2, self.boundary1, plot_height)
+            rect1.setBrush(pg.mkBrush(self.medium1_color))
+            rect1.setOpacity(0.4)  # More visible
+            rect1.setPen(pg.mkPen(None))  # No border
+            self.addItem(rect1)
+            self.medium_rects.append(rect1)
+            
+            # Medium 2 (middle)
+            rect2 = pg.QtGui.QGraphicsRectItem(self.boundary1, -plot_height/2, 
+                                            self.boundary2 - self.boundary1, plot_height)
+            rect2.setBrush(pg.mkBrush(self.medium2_color))
+            rect2.setOpacity(0.4)
+            rect2.setPen(pg.mkPen(None))
+            self.addItem(rect2)
+            self.medium_rects.append(rect2)
+            
+            # Medium 3 (right)
+            rect3 = pg.QtGui.QGraphicsRectItem(self.boundary2, -plot_height/2, 
+                                            3000 - self.boundary2, plot_height)
+            rect3.setBrush(pg.mkBrush(self.medium3_color))
+            rect3.setOpacity(0.4)
+            rect3.setPen(pg.mkPen(None))
+            self.addItem(rect3)
+            self.medium_rects.append(rect3)
+            
+            # Update medium labels
+            for i, (color, name, index) in enumerate(self.medium_labels):
+                self.removeItem(color)
+                self.removeItem(name)
+            self.medium_labels = []
+            
+            # Add medium labels
+            # Medium 1
+            medium1_color_label = pg.TextItem(f"n₁: {self.n1:.4f}", anchor=(0.5, 0), color='white')
+            medium1_color_label.setPos(self.boundary1 / 2, -5)
+            self.addItem(medium1_color_label)
+            
+            medium1_name_label = pg.TextItem(f"Medium 1", anchor=(0.5, 1), color='white')
+            medium1_name_label.setPos(self.boundary1 / 2, 5)
+            self.addItem(medium1_name_label)
+            
+            self.medium_labels.append((medium1_color_label, medium1_name_label, 1))
+            
+            # Medium 2
+            medium2_color_label = pg.TextItem(f"n₂: {self.n2:.4f}", anchor=(0.5, 0), color='white')
+            medium2_color_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, -5)
+            self.addItem(medium2_color_label)
+            
+            medium2_name_label = pg.TextItem(f"Medium 2", anchor=(0.5, 1), color='white')
+            medium2_name_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, 5)
+            self.addItem(medium2_name_label)
+            
+            self.medium_labels.append((medium2_color_label, medium2_name_label, 2))
+            
+            # Medium 3
+            medium3_color_label = pg.TextItem(f"n₃: {self.n3:.4f}", anchor=(0.5, 0), color='white')
+            medium3_color_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, -5)
+            self.addItem(medium3_color_label)
+            
+            medium3_name_label = pg.TextItem(f"Medium 3", anchor=(0.5, 1), color='white')
+            medium3_name_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, 5)
+            self.addItem(medium3_name_label)
+            
+            self.medium_labels.append((medium3_color_label, medium3_name_label, 3))
+            
+            # Update the wave curve with current parameters
+            if not self.white_light:
+                # Get color from wavelength
+                r, g, b = wavelength_to_rgb(self.wavelength)
+                self.wave_curve.setPen(pg.mkPen(QColor(r, g, b), width=4))
+                
+                # Update wave data
+                wave = self.calculate_wave(self.wavelength)
+                self.wave_curve.setData(self.x, wave)
+            else:
+                # Update white light curves
+                if hasattr(self, 'wave_curves'):
+                    for curve, wl in self.wave_curves:
+                        r, g, b = wavelength_to_rgb(wl)
+                        curve.setPen(pg.mkPen(QColor(r, g, b), width=2))
+                        wave = self.calculate_wave(wl)
+                        curve.setData(self.x, wave)
+            
+            # Update interference waves if enabled
+            if self.show_interference:
+                if not self.white_light:
+                    waves = self.calculate_interference_waves(self.wavelength)
+                    self.interference_wave1.setData(self.x, waves[0])
+                    self.interference_wave2.setData(self.x, waves[1])
+            
+            # Update ray lines if ray mode is enabled
+            if self.show_ray_mode:
+                self.update_ray_lines()
+                
+            # Restore y range to prevent auto-scaling
+            self.setYRange(y_range[0], y_range[1], padding=0)
+            
+        except Exception as e:
+            print(f"Error in update_plot: {e}")
 
+    def toggle_ray_mode(self, enabled):
+        """Toggle ray visualization mode"""
+        self.show_ray_mode = enabled
+        self.ray_incident.setVisible(enabled)
+        self.ray_refracted1.setVisible(enabled)
+        self.ray_refracted2.setVisible(enabled)
         
-        # Update wavelength color for single wave mode
-        if not self.white_light:
-            color = wavelength_to_rgb(self.wavelength)
-            self.wave_curve.setPen(pg.mkPen(color, width=4))
-
-        # Update wave curve
-        wave = self.calculate_wave(self.wavelength)
-        self.wave_curve.setData(self.x, wave)
+        # Initially hide reflection markers (they'll be shown if TIR occurs)
+        self.reflection_marker1.setVisible(False)
+        self.reflection_marker2.setVisible(False)
+        
+        if enabled:
+            self.update_ray_lines()
 
     def update_wavelength(self, value):
+        """Update the wavelength and colors"""
         self.wavelength = value
+        
+        # Update wave color based on wavelength
+        if not self.white_light:
+            r, g, b = wavelength_to_rgb(self.wavelength)
+            wave_color = QColor(r, g, b)
+            
+            # Update wave curve color
+            self.wave_curve.setPen(pg.mkPen(wave_color, width=4))
+            
+            # Update ray colors if ray mode is enabled
+            if self.show_ray_mode:
+                ray_color = pg.mkPen(wave_color, width=4, style=Qt.DashLine)
+                self.ray_incident.setPen(ray_color)
+                self.ray_refracted1.setPen(ray_color)
+                self.ray_refracted2.setPen(ray_color)
+        
+        # Update the wave data
         self.update_plot()
         
-        
-        
+        # Update ray visualization if enabled
+        if self.show_ray_mode:
+            self.update_ray_lines()
+            
     def update_amplitude(self, value):
+        """Update the amplitude of the wave"""
         self.amplitude = value
-        # Let the zoom control handle the Y range adjustment if it exists
-        if hasattr(self, 'parent') and hasattr(self.parent, 'zoom_slider'):
-            zoom_factor = self.parent.zoom_slider.value() / 10.0
-            y_range = self.amplitude * self.visualization_scale * 1.5 / zoom_factor
-            self.setYRange(-y_range, y_range)
-        else:
-            # Default behavior with visualization scaling
-            self.setYRange(-1, 1, padding=0)
+        
+        # Store current y-range before updating
+        y_range = self.getPlotItem().getViewBox().viewRange()[1]
+        
+        # Update the wave with new amplitude
+        wave = self.calculate_wave(self.wavelength)
+        self.wave_curve.setData(self.x, wave)
+        
+        # Restore the previous y-range to prevent auto-zooming
+        self.getPlotItem().getViewBox().setYRange(y_range[0], y_range[1], padding=0)
 
     def update_speed(self, value):
         self.speed = value
@@ -428,16 +614,31 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.update_plot()
         
     def update_medium1(self, medium_name):
-        self.current_medium1 = medium_name
-        self.update_plot()
+        """Update medium 1 selection"""
+        n = self.medium_presets[medium_name]['n']
+        self.n1_slider.setValue(int(n * 100))
+        self.n1_value.setText(f"{n:.4f}")
+        
+        # Update the wave widget
+        self.wave_widget.update_medium1(medium_name)
         
     def update_medium2(self, medium_name):
-        self.current_medium2 = medium_name
-        self.update_plot()
+        """Update medium 2 selection"""
+        n = self.medium_presets[medium_name]['n']
+        self.n2_slider.setValue(int(n * 100))
+        self.n2_value.setText(f"{n:.4f}")
+        
+        # Update the wave widget
+        self.wave_widget.update_medium2(medium_name)
         
     def update_medium3(self, medium_name):
-        self.current_medium3 = medium_name
-        self.update_plot()
+        """Update medium 3 selection"""
+        n = self.medium_presets[medium_name]['n']
+        self.n3_slider.setValue(int(n * 100))
+        self.n3_value.setText(f"{n:.4f}")
+        
+        # Update the wave widget
+        self.wave_widget.update_medium3(medium_name)
         
     def toggle_prism_mode(self, enabled):
         """Toggle between normal and prism simulation mode"""
@@ -445,15 +646,254 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.update_plot()
         
     def toggle_white_light(self, enabled):
-        """Toggle between single wavelength and white light (multiple wavelengths)"""
+        """Toggle white light mode"""
         self.white_light = enabled
+        if enabled:
+            # Create the curves for visible spectrum
+            self.create_white_light_curves()
         
-        # Show/hide appropriate wave curves
-        self.wave_curve.setVisible(not enabled)
-        
-        for _, curve in self.wave_curves:
+        # Update visibility of wave curves
+        for wl, curve in self.wave_curves:
             curve.setVisible(enabled)
-        
+
+    def create_white_light_curves(self):
+        # Implementation of create_white_light_curves method
+        pass
+
+    def update_ray_lines(self):
+        """Update the ray lines to visualize refraction angles"""
+        try:
+            # Hide reflection markers initially
+            self.reflection_marker1.setVisible(False)
+            self.reflection_marker2.setVisible(False)
+            
+            # Get the refractive indices of the media
+            n1 = self.n1
+            n2 = self.n2
+            n3 = self.n3
+            
+            # Get the color from wavelength for all ray segments
+            if not self.white_light:
+                # Get RGB tuple
+                r, g, b = wavelength_to_rgb(self.wavelength)
+                # Convert to Qt color
+                ray_color = pg.mkPen(QColor(r, g, b), width=4, style=Qt.DashLine)
+                self.ray_incident.setPen(ray_color)
+                self.ray_refracted1.setPen(ray_color)
+                self.ray_refracted2.setPen(ray_color)
+            else:
+                # Default colors for white light mode
+                self.ray_incident.setPen(pg.mkPen('#ffffff', width=4, style=Qt.DashLine))
+                self.ray_refracted1.setPen(pg.mkPen('#00aaff', width=4, style=Qt.DashLine))
+                self.ray_refracted2.setPen(pg.mkPen('#22ff22', width=4, style=Qt.DashLine))
+            
+            # Use consistent scale factor for better visualization
+            # A smaller scale factor makes the angles less steep visually
+            scale_factor = 0.008
+            
+            # Calculate incident angle in radians
+            angle_incidence_rad = np.radians(self.angle_of_incidence)
+            
+            # Set target y-position for the ray to hit at the first boundary
+            target_y = 0
+            boundary1_y = target_y
+            
+            # Calculate where to start the ray to hit the boundary
+            # Make the incident ray longer by using a much larger value
+            # Use the entire plot width for medium 1
+            incident_ray_length = self.boundary1  # Use the entire medium 1 width
+            start_x = 0  # Start from left edge
+            start_y = boundary1_y - np.tan(angle_incidence_rad) * incident_ray_length * scale_factor
+            
+            # Calculate the critical angles if applicable
+            critical_angle1 = None
+            critical_angle1_deg = None
+            if n1 > n2:
+                critical_angle1 = np.arcsin(n2/n1)
+                critical_angle1_deg = np.degrees(critical_angle1)
+                print(f"Critical angle from medium 1 to 2: {critical_angle1_deg:.2f}°")
+            
+            critical_angle2 = None
+            critical_angle2_deg = None
+            if n2 > n3:
+                critical_angle2 = np.arcsin(n3/n2)
+                critical_angle2_deg = np.degrees(critical_angle2)
+                print(f"Critical angle from medium 2 to 3: {critical_angle2_deg:.2f}°")
+            
+            # Calculate sin(theta2) using Snell's law: n1*sin(theta1) = n2*sin(theta2)
+            sin_theta2 = n1 * np.sin(angle_incidence_rad) / n2
+            print(f"sin(theta2) = {sin_theta2:.6f}")
+            
+            # First set the incident ray - this is always displayed
+            self.ray_incident.setData([start_x, self.boundary1], [start_y, boundary1_y])
+            self.ray_incident.setVisible(True)
+            
+            # Check for TIR at first boundary
+            if abs(sin_theta2) >= 1.0:
+                # TIR is occurring - show reflection
+                print(f"TIR DETECTED at boundary 1! |sin(theta2)| = {abs(sin_theta2):.6f} > 1.0")
+                if critical_angle1_deg:
+                    print(f"Incident angle: {self.angle_of_incidence}° > Critical angle: {critical_angle1_deg:.2f}°")
+                
+                # Update angle labels
+                self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+                self.angle2_label.setText("θ₂: TIR")
+                self.angle3_label.setText("θ₃: N/A")
+                
+                # Calculate the reflection angle (mirror of incident angle across normal)
+                # Law of reflection: angle of incidence = angle of reflection (from normal)
+                # In our coordinate system, the reflection goes up and to the left
+                # Use same length for reflected ray as incident ray for symmetry
+                reflected_end_x = start_x  # Same x-distance from boundary
+                reflected_end_y = -start_y  # Mirrored vertically (y-axis is the normal)
+                
+                # Set the reflected ray
+                self.ray_refracted1.setData([self.boundary1, reflected_end_x], [boundary1_y, reflected_end_y])
+                self.ray_refracted1.setVisible(True)
+                
+                # Add reflection marker at the boundary
+                self.reflection_marker1.setData([self.boundary1], [boundary1_y])
+                self.reflection_marker1.setVisible(True)
+                
+                # Hide the second refracted ray
+                self.ray_refracted2.setVisible(False)
+                
+                return
+            
+            # No TIR at first boundary - safe to calculate refraction angle
+            angle_refraction1_rad = np.arcsin(sin_theta2)
+            angle_refraction1_deg = np.degrees(angle_refraction1_rad)
+            print(f"Refraction angle at boundary 1: {angle_refraction1_deg:.2f}°")
+            
+            # Calculate first refracted ray
+            # Determine distance to second boundary
+            boundary_distance = self.boundary2 - self.boundary1
+            
+            # Calculate endpoint for first refracted ray
+            refracted1_end_x = self.boundary2
+            refracted1_end_y = boundary1_y + np.tan(angle_refraction1_rad) * boundary_distance * scale_factor
+            
+            # Set first refracted ray
+            self.ray_refracted1.setData([self.boundary1, refracted1_end_x], [boundary1_y, refracted1_end_y])
+            self.ray_refracted1.setVisible(True)
+            
+            # Calculate angle of incidence at second boundary (relative to normal)
+            # This is the same as angle_refraction1_rad for our coordinate system
+            angle_incidence2_rad = angle_refraction1_rad
+            angle_incidence2_deg = angle_refraction1_deg
+            
+            # Check for TIR at second boundary
+            # Calculate sin(theta3) using Snell's law
+            sin_theta3 = n2 * np.sin(angle_incidence2_rad) / n3
+            print(f"sin(theta3) = {sin_theta3:.6f}")
+            
+            # Check if incident angle at second boundary exceeds critical angle
+            # Need to compare absolute values for negative angles
+            tir_at_boundary2 = False
+            if critical_angle2 is not None:
+                # TIR occurs when |angle of incidence| > critical angle
+                if abs(angle_incidence2_rad) > critical_angle2:
+                    tir_at_boundary2 = True
+                    print(f"TIR at boundary 2! |{angle_incidence2_deg:.2f}°| > {np.degrees(critical_angle2):.2f}°")
+            
+            # Also check if |sin(theta3)| > 1, which is another way to detect TIR
+            if abs(sin_theta3) >= 1.0:
+                tir_at_boundary2 = True
+                print(f"TIR DETECTED at boundary 2! |sin(theta3)| = {abs(sin_theta3):.6f} > 1.0")
+            
+            if tir_at_boundary2:
+                # TIR at second boundary
+                # Update angle labels
+                self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+                self.angle2_label.setText(f"θ₂: {angle_refraction1_deg:.1f}°")
+                self.angle3_label.setText("θ₃: TIR")
+                
+                # Calculate reflection at second boundary
+                # Reflection angle equals angle of incidence across normal
+                reflection_angle2_rad = -angle_incidence2_rad # Mirror across normal
+                
+                # Use similar distance for reflected ray
+                reflected2_end_x = self.boundary1  # Back to first boundary for clear visualization
+                reflected2_delta_x = self.boundary2 - reflected2_end_x
+                reflected2_end_y = refracted1_end_y + np.tan(reflection_angle2_rad) * reflected2_delta_x * scale_factor
+                
+                # Set second ray segment (reflected ray)
+                self.ray_refracted2.setData([self.boundary2, reflected2_end_x], [refracted1_end_y, reflected2_end_y])
+                self.ray_refracted2.setVisible(True)
+                
+                # Add reflection marker at second boundary
+                self.reflection_marker2.setData([self.boundary2], [refracted1_end_y])
+                self.reflection_marker2.setVisible(True)
+                
+                return
+                
+            # No TIR at second boundary - calculate normal refraction
+            # Safely calculate refraction angle, avoiding arcsin errors
+            try:
+                angle_refraction2_rad = np.arcsin(sin_theta3)
+                angle_refraction2_deg = np.degrees(angle_refraction2_rad)
+                print(f"Refraction angle at boundary 2: {angle_refraction2_deg:.2f}°")
+                
+                # Calculate second refracted ray
+                # Use a fixed length for visualization clarity
+                refracted2_length = 1000
+                refracted2_end_x = self.boundary2 + refracted2_length
+                refracted2_end_y = refracted1_end_y + np.tan(angle_refraction2_rad) * refracted2_length * scale_factor
+                
+                # Set second refracted ray
+                self.ray_refracted2.setData([self.boundary2, refracted2_end_x], [refracted1_end_y, refracted2_end_y])
+                self.ray_refracted2.setVisible(True)
+                
+                # Update angle labels
+                self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+                self.angle2_label.setText(f"θ₂: {angle_refraction1_deg:.1f}°")
+                self.angle3_label.setText(f"θ₃: {angle_refraction2_deg:.1f}°")
+            except Exception as e:
+                # If arcsin calculation fails, it should be TIR - handle accordingly
+                print(f"Exception in calculating refraction angle: {e}")
+                
+                # Mark as TIR
+                self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+                self.angle2_label.setText(f"θ₂: {angle_refraction1_deg:.1f}°")
+                self.angle3_label.setText("θ₃: TIR (error)")
+                
+                # Calculate reflection instead
+                reflection_angle2_rad = -angle_incidence2_rad
+                
+                # Calculate reflected ray
+                reflected2_end_x = self.boundary1
+                reflected2_delta_x = self.boundary2 - reflected2_end_x
+                reflected2_end_y = refracted1_end_y + np.tan(reflection_angle2_rad) * reflected2_delta_x * scale_factor
+                
+                # Set second ray segment (reflected ray)
+                self.ray_refracted2.setData([self.boundary2, reflected2_end_x], [refracted1_end_y, reflected2_end_y])
+                self.ray_refracted2.setVisible(True)
+                
+                # Add reflection marker at second boundary
+                self.reflection_marker2.setData([self.boundary2], [refracted1_end_y])
+                self.reflection_marker2.setVisible(True)
+                
+        except Exception as e:
+            # Top-level exception handling to prevent crashes
+            print(f"Error in ray calculation: {type(e).__name__}: {e}")
+            # Provide a simple ray visualization
+            self.ray_incident.setData([0, self.boundary1], [0, 0])
+            self.ray_refracted1.setData([self.boundary1, self.boundary2], [0, 0])
+            self.ray_refracted2.setData([self.boundary2, 3000], [0, 0])
+            self.ray_incident.setVisible(True)
+            self.ray_refracted1.setVisible(True)
+            self.ray_refracted2.setVisible(True)
+            # Set error labels
+            self.angle1_label.setText(f"θ₁: {self.angle_of_incidence}°")
+            self.angle2_label.setText("θ₂: Error")
+            self.angle3_label.setText("θ₃: Error")
+
+    def update_angle(self, value):
+        """Update the angle of incidence"""
+        self.angle_of_incidence = value
+        if self.show_ray_mode:
+            self.update_ray_lines()
+
 class ColoredSlider(QSlider):
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
@@ -631,16 +1071,16 @@ class LightSimulationApp(QMainWindow):
 
         # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
-            'Air': 1.0003,
-            'Water': 1.33,
-            'Glass (Crown)': 1.52,
-            'Glass (Flint)': 1.62,
-            'Diamond': 2.42,
-            'Acrylic': 1.49,
-            'Glycerine': 1.47,
-            'Ethanol': 1.36,
-            'Quartz': 1.54,
-            'Sapphire': 1.77
+            'Air': {'n': 1.0003, 'color': '#222233'},
+            'Water': {'n': 1.33, 'color': '#2244AA'},
+            'Glass (Crown)': {'n': 1.52, 'color': '#445566'},
+            'Glass (Flint)': {'n': 1.62, 'color': '#556677'},
+            'Diamond': {'n': 2.42, 'color': '#778899'},
+            'Acrylic': {'n': 1.49, 'color': '#223355'},
+            'Glycerine': {'n': 1.47, 'color': '#336699'},
+            'Ethanol': {'n': 1.36, 'color': '#3377AA'},
+            'Quartz': {'n': 1.54, 'color': '#667788'},
+            'Sapphire': {'n': 1.77, 'color': '#5566AA'}
         }
         
         # Preset scenarios
@@ -736,11 +1176,11 @@ class LightSimulationApp(QMainWindow):
         angle_layout = QHBoxLayout()
         angle_label = QLabel("Angle of Incidence:")
         self.angle_slider = BlueSlider()
-        self.angle_slider.setMinimum(0)
+        self.angle_slider.setMinimum(-90)
         self.angle_slider.setMaximum(90)
-        self.angle_slider.setValue(0)
+        self.angle_slider.setValue(0)  # 0 degrees is straight line
         self.angle_value = QLabel("0°")
-    
+        
         angle_layout.addWidget(angle_label)
         angle_layout.addWidget(self.angle_slider)
         angle_layout.addWidget(self.angle_value)
@@ -751,9 +1191,11 @@ class LightSimulationApp(QMainWindow):
         mode_layout = QHBoxLayout()
         self.white_light_check = QCheckBox("White Light")
         self.interference_check = QCheckBox("Show Interference")
+        self.ray_mode_check = QCheckBox("Show Ray Path")
 
         mode_layout.addWidget(self.white_light_check)
         mode_layout.addWidget(self.interference_check)
+        mode_layout.addWidget(self.ray_mode_check)
         wave_layout.addLayout(mode_layout)
         
         
@@ -793,7 +1235,6 @@ class LightSimulationApp(QMainWindow):
         self.medium2_combo = QComboBox()
         for medium in sorted(self.medium_presets.keys()):
             self.medium2_combo.addItem(medium)
-        self.medium2_combo.setCurrentText("Water")
         medium2_layout.addWidget(self.medium2_combo)
         
         # Medium 2 n slider
@@ -872,6 +1313,7 @@ class LightSimulationApp(QMainWindow):
 
         self.interference_check.stateChanged.connect(self.toggle_interference)
         
+        self.ray_mode_check.stateChanged.connect(self.toggle_ray_mode)
 
 
     def toggle_interference(self, state):
@@ -893,8 +1335,17 @@ class LightSimulationApp(QMainWindow):
     # --- Wave Control Event Handlers ---
     def update_wavelength(self, value):
         """Update wavelength value"""
-        self.wavelength_value.setText(f"{value} nm")
+        # Update displayed value
+        nm_value = value
+        self.wavelength_value.setText(f"{nm_value} nm")
+        
+        # Update widget
         self.wave_widget.update_wavelength(value)
+        
+        # Update color indicator on slider
+        r, g, b = wavelength_to_rgb(value)
+        color_style = f"background-color: rgb({r},{g},{b});"
+        self.wavelength_color_indicator.setStyleSheet(color_style)
         
     def update_amplitude(self, value):
         """Update amplitude value"""
@@ -931,38 +1382,31 @@ class LightSimulationApp(QMainWindow):
         
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
-        n = self.medium_presets[medium_name]
+        n = self.medium_presets[medium_name]['n']
         self.n1_slider.setValue(int(n * 100))
-        self.wave_widget.n1 = n
+        self.n1_value.setText(f"{n:.4f}")
+        
+        # Update the wave widget
         self.wave_widget.update_medium1(medium_name)
         
     def update_medium2(self, medium_name):
         """Update medium 2 selection"""
-        n = self.medium_presets[medium_name]
+        n = self.medium_presets[medium_name]['n']
         self.n2_slider.setValue(int(n * 100))
-        self.wave_widget.n2 = n
+        self.n2_value.setText(f"{n:.4f}")
+        
+        # Update the wave widget
         self.wave_widget.update_medium2(medium_name)
         
     def update_medium3(self, medium_name):
         """Update medium 3 selection"""
-        n = self.medium_presets[medium_name]
+        n = self.medium_presets[medium_name]['n']
         self.n3_slider.setValue(int(n * 100))
-        self.wave_widget.n3 = n
+        self.n3_value.setText(f"{n:.4f}")
+        
+        # Update the wave widget
         self.wave_widget.update_medium3(medium_name)
-    
         
-    
-
-    def update_zoom(self, value):
-    #Update vertical zoom factor#
-        zoom_factor = value / 10.0  # Convert to a scale where 10 = 1.0x
-        self.zoom_value.setText(f"{zoom_factor:.1f}x")
-    # Adjust the y-range of the plot widget
-        amplitude = self.wave_widget.amplitude
-        y_range = amplitude * 1.5 / zoom_factor
-        self.wave_widget.setYRange(-y_range, y_range)
-        
-            
     def toggle_white_light(self, state):
         """Toggle white light mode"""
         enabled = state == Qt.Checked
@@ -977,15 +1421,24 @@ class LightSimulationApp(QMainWindow):
         self.medium2_combo.setCurrentText(medium2)
         self.medium3_combo.setCurrentText(medium3)
 
-        n1 = self.medium_presets[medium1]
-        n2 = self.medium_presets[medium2]
-        n3 = self.medium_presets[medium3]
+        n1 = self.medium_presets[medium1]['n']
+        n2 = self.medium_presets[medium2]['n']
+        n3 = self.medium_presets[medium3]['n']
 
     def update_angle(self, value):
-        """Update angle of incidence"""
+        """Update the angle of incidence"""
+        # Update label
         self.angle_value.setText(f"{value}°")
+        # Update angle in wave widget
         self.wave_widget.angle_of_incidence = value
-        self.wave_widget.update_plot()
+        # Update ray visualization
+        if self.wave_widget.show_ray_mode:
+            self.wave_widget.update_ray_lines()
+            
+    def toggle_ray_mode(self, state):
+        """Toggle ray mode"""
+        enabled = state == Qt.Checked
+        self.wave_widget.toggle_ray_mode(enabled)
 
 
 # Run the application
