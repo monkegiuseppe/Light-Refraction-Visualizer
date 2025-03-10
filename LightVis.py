@@ -72,10 +72,9 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.setLabel('left', 'Amplitude', color='w')
         self.setLabel('bottom', 'Position', color='w')
         
-       
-       
+        # Ensure background stays black regardless of parent styling
+        self.setStyleSheet("background-color: black;")
 
-        
         # Add grid
         self.showGrid(x=True, y=True, alpha=0.3)
         self.getPlotItem().getAxis('left').setPen('w')
@@ -122,14 +121,25 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.boundary2 = 2000
         
         # Add angle labels at boundaries 
-        self.angle1_label = pg.TextItem("θ₁: 0°", anchor=(0.5, 0), color='w')
-        self.angle1_label.setPos(self.boundary1 - 100, -1.5)
+        self.angle1_label = pg.TextItem("θ₁: 0°", anchor=(0.5, 0), color='#ffffff')
+        self.angle1_label.setPos(self.boundary1 - 200, -1.5)  # Moved further left
+        # Set a larger, bolder font for better visibility
+        font = QFont()
+        font.setPointSize(12)
+        font.setBold(True)
+        self.angle1_label.setFont(font)
+        # Add a semi-transparent background to the text for better visibility
+        self.angle1_label.fill = pg.mkBrush(0, 0, 0, 150)  # Semi-transparent black
 
-        self.angle2_label = pg.TextItem("θ₂: 0°", anchor=(0.5, 0), color='w')
-        self.angle2_label.setPos(self.boundary1 + 100, -1.5)
+        self.angle2_label = pg.TextItem("θ₂: 0°", anchor=(0.5, 0), color='#ffffff')
+        self.angle2_label.setPos(self.boundary1 + 200, -1.5)  # Moved further right
+        self.angle2_label.setFont(font)
+        self.angle2_label.fill = pg.mkBrush(0, 0, 0, 150)  # Semi-transparent black
 
-        self.angle3_label = pg.TextItem("θ₃: 0°", anchor=(0.5, 0), color='w')
-        self.angle3_label.setPos(self.boundary2 + 100, -1.5)
+        self.angle3_label = pg.TextItem("θ₃: 0°", anchor=(0.5, 0), color='#ffffff')
+        self.angle3_label.setPos(self.boundary2 + 200, -1.5)  # Moved further right
+        self.angle3_label.setFont(font)
+        self.angle3_label.fill = pg.mkBrush(0, 0, 0, 150)  # Semi-transparent black
 
         self.addItem(self.angle1_label)
         self.addItem(self.angle2_label)
@@ -472,6 +482,30 @@ class ColoredSlider(QSlider):
         """)
 
 
+class BlueSlider(QSlider):
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #999999;
+                height: 10px;
+                background: white;
+                margin: 2px 0;
+            }
+            QSlider::sub-page:horizontal {
+                background: #0088ff;
+                border: 1px solid #999999;
+                height: 10px;
+                margin: 2px 0;
+            }
+            QSlider::handle:horizontal {
+                background: white;
+                border: 1px solid #565a5e;
+                width: 10px;
+                margin: -4px 0;
+                border-radius: 3px;
+            }
+        """)
 
 class LightSimulationApp(QMainWindow):
     def __init__(self):
@@ -491,22 +525,31 @@ class LightSimulationApp(QMainWindow):
             color: #ffffff;
             font-family: 'Foto';
         }
+        /* Exception for plot widgets */
+        QGraphicsView, PlotWidget, PyQtGraph {
+            background-color: transparent;
+        }
         QGroupBox {
-            border: 1px solid #ffffff;
-            margin-top: 10px;
-            padding-top: 10px;
+            border: 1px solid #444444;
+            border-radius: 4px;
+            margin-top: 14px;
+            padding-top: 12px;
             font-family: 'Foto';
+            font-size: 12px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            padding: 0 3px;
+            padding: 0 6px;
             color: #ffffff;
             font-family: 'Foto';
+            font-weight: bold;
         }
         QLabel {
             color: #ffffff;
             font-family: 'Foto';
+            padding: 2px;
+            font-size: 12px;
         }
         QSlider {
             background-color: transparent;
@@ -517,25 +560,74 @@ class LightSimulationApp(QMainWindow):
         QComboBox {
             color: #ffffff;
             background-color: #3c3c3c;
-            selection-background-color: #404040;
-            border: 1px solid #ffffff;
+            selection-background-color: #505050;
+            border: 1px solid #555555;
+            border-radius: 3px;
+            padding: 4px 8px;
+            min-height: 20px;
             font-family: 'Foto';
+        }
+        QComboBox:hover {
+            border: 1px solid #777777;
+            background-color: #454545;
+        }
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 20px;
+            border-left: 1px solid #555555;
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+        }
+        QComboBox::down-arrow {
+            image: none;
+            width: 0;
+            height: 0;
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 5px solid #bbbbbb;
+            margin-right: 6px;
+        }
+        QComboBox QAbstractItemView {
+            border: 1px solid #555555;
+            background-color: #3c3c3c;
+            selection-background-color: #0088ff;
+            selection-color: white;
+            border-radius: 3px;
+            padding: 2px;
         }
         QPushButton {
             color: #ffffff;
             background-color: #3c3c3c;
-            border: 1px solid #ffffff;
-            padding: 5px;
+            border: 1px solid #555555;
+            border-radius: 3px;
+            padding: 6px 12px;
             font-family: 'Foto';
         }
         QPushButton:hover {
-            background-color: #404040;
+            background-color: #454545;
+            border: 1px solid #777777;
+        }
+        QPushButton:pressed {
+            background-color: #505050;
         }
         QCheckBox {
+            spacing: 6px;
             color: #ffffff;
             font-family: 'Foto';
         }
-    """)
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border: 1px solid #555555;
+            border-radius: 2px;
+            background-color: #3c3c3c;
+        }
+        QCheckBox::indicator:checked {
+            background-color: #0088ff;
+            border: 1px solid #0088ff;
+        }
+        """)
 
         # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
@@ -615,7 +707,7 @@ class LightSimulationApp(QMainWindow):
         # Amplitude slider
         amplitude_layout = QHBoxLayout()
         amplitude_label = QLabel("Amplitude:")
-        self.amplitude_slider = QSlider(Qt.Horizontal)
+        self.amplitude_slider = BlueSlider()
         self.amplitude_slider.setMinimum(1)
         self.amplitude_slider.setMaximum(10)
         self.amplitude_slider.setValue(5)
@@ -629,7 +721,7 @@ class LightSimulationApp(QMainWindow):
         # Speed slider
         speed_layout = QHBoxLayout()
         speed_label = QLabel("Wave Speed:")
-        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider = BlueSlider()
         self.speed_slider.setMinimum(1)
         self.speed_slider.setMaximum(10)
         self.speed_slider.setValue(2)
@@ -643,7 +735,7 @@ class LightSimulationApp(QMainWindow):
         # Angle of incidence slider
         angle_layout = QHBoxLayout()
         angle_label = QLabel("Angle of Incidence:")
-        self.angle_slider = QSlider(Qt.Horizontal)
+        self.angle_slider = BlueSlider()
         self.angle_slider.setMinimum(0)
         self.angle_slider.setMaximum(90)
         self.angle_slider.setValue(0)
@@ -680,7 +772,7 @@ class LightSimulationApp(QMainWindow):
         # Medium 1 n slider
         n1_layout = QHBoxLayout()
         n1_label = QLabel("n₁:")
-        self.n1_slider = QSlider(Qt.Horizontal)
+        self.n1_slider = BlueSlider()
         self.n1_slider.setMinimum(100)
         self.n1_slider.setMaximum(300)
         self.n1_slider.setValue(100)
@@ -707,7 +799,7 @@ class LightSimulationApp(QMainWindow):
         # Medium 2 n slider
         n2_layout = QHBoxLayout()
         n2_label = QLabel("n₂:")
-        self.n2_slider = QSlider(Qt.Horizontal)
+        self.n2_slider = BlueSlider()
         self.n2_slider.setMinimum(100)
         self.n2_slider.setMaximum(300)
         self.n2_slider.setValue(133)
@@ -734,7 +826,7 @@ class LightSimulationApp(QMainWindow):
         # Medium 3 n slider
         n3_layout = QHBoxLayout()
         n3_label = QLabel("n₃:")
-        self.n3_slider = QSlider(Qt.Horizontal)
+        self.n3_slider = BlueSlider()
         self.n3_slider.setMinimum(100)
         self.n3_slider.setMaximum(300)
         self.n3_slider.setValue(152)
