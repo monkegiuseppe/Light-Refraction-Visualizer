@@ -71,7 +71,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.setBackground('k')
         self.setLabel('left', 'Amplitude', color='w')
         self.setLabel('bottom', 'Position', color='w')
-
+        
        
        
 
@@ -103,16 +103,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.time = 0
         self.angle_of_incidence = 0
 
-        # Add refracted wave curves
-        self.refracted_wave1 = self.plot(self.x, np.zeros_like(self.x), 
-                                       pen=pg.mkPen('y', width=2, style=Qt.DashLine))
-        self.refracted_wave2 = self.plot(self.x, np.zeros_like(self.x), 
-                                       pen=pg.mkPen('y', width=2, style=Qt.DashLine))
-        
-         # Hide refracted waves initially
-        self.refracted_wave1.setVisible(False)
-        self.refracted_wave2.setVisible(False)
-        self.show_refraction = False
+       
 
         # Add interference wave curves
         self.interference_wave1 = self.plot(self.x, np.zeros_like(self.x), 
@@ -248,37 +239,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         wave = self.calculate_wave(self.wavelength)
         self.wave_curve = self.plot(self.x, wave, pen=pg.mkPen('b', width=4))
 
-    def toggle_refraction(self, enabled):
-        """Toggle visibility of refracted waves"""
-        self.show_refraction = enabled
-        self.refracted_wave1.setVisible(enabled)
-        self.refracted_wave2.setVisible(enabled)
-
-    def calculate_refracted_wave(self, wavelength, boundary_pos, n1, n2):
-        """Calculate reflected wave at boundary"""
-        wave = np.zeros_like(self.x)
-        
-        # Only calculate reflection before the boundary
-        mask = self.x >= boundary_pos
-        x = self.x[mask] - boundary_pos
-
-         # Calculate refraction angle using Snell's law
-        angle_incidence = np.radians(self.angle_of_incidence)
-
-        k = (2 * np.pi * n2) / wavelength
-        omega = self.speed
-
-        y = np.linspace(-2, 2, len(self.x))[mask]
-
-        # Calculate reflected wave with negative angle
-        x_comp = x * np.cos(angle_refraction)
-        y_comp = y * np.sin(angle_refraction)
-
-        phase = k * (x_comp + y_comp) - omega * self.time
-        wave[mask] = self.amplitude * self.visualization_scale * np.sin(phase)
-        
-        return wave
-    
     
     def calculate_interference_waves(self, wavelength):
         """Calculate the component waves that create interference"""
@@ -383,11 +343,7 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.interference_wave1.setData(self.x, wave1)
                 self.interference_wave2.setData(self.x, wave2)
                 
-            if self.show_refraction:
-                    refr1 = self.calculate_refracted_wave(wl, self.boundary1, self.n1, self.n2)
-                    refr2 = self.calculate_refracted_wave(wl, self.boundary2, self.n2, self.n3)
-                    self.refracted_wave1.setData(self.x, refr1)
-                    self.refracted_wave2.setData(self.x, refr2)
+            
         else:
         # Update single wave
             wave = self.calculate_wave(self.wavelength)
@@ -398,17 +354,8 @@ class WaveSimulationWidget(pg.PlotWidget):
             self.interference_wave1.setData(self.x, wave1)
             self.interference_wave2.setData(self.x, wave2)
             
-        if self.show_refraction:
-            refr1 = self.calculate_refracted_wave(self.wavelength, self.boundary1, self.n1, self.n2)
-            refr2 = self.calculate_refracted_wave(self.wavelength, self.boundary2, self.n2, self.n3)
-            self.refracted_wave1.setData(self.x, refr1)
-            self.refracted_wave2.setData(self.x, refr2)
+        
 
-    def toggle_refraction(self, enabled):
-        """Toggle visibility of reflected waves"""
-        self.show_refraction = enabled
-        self.refracted_wave1.setVisible(enabled)
-        self.refracted_wave2.setVisible(enabled)
 
     def toggle_interference(self, enabled):
         """Toggle visibility of interference waves"""
@@ -497,6 +444,32 @@ class WaveSimulationWidget(pg.PlotWidget):
         for _, curve in self.wave_curves:
             curve.setVisible(enabled)
         
+class ColoredSlider(QSlider):
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #999999;
+                height: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0.000 #380082,    /* 380nm - violet */
+                    stop:0.161 #4400ff,    /* 440nm - deep blue */
+                    stop:0.297 #0088ff,    /* 490nm - light blue */
+                    stop:0.351 #00ff00,    /* 510nm - green */
+                    stop:0.540 #ffff00,    /* 580nm - yellow */
+                    stop:0.716 #ff8800,    /* 620nm - orange */
+                    stop:0.716 #ff0000,    /* 645nm - red */
+                    stop:1.000 #820000);   /* 750nm - deep red */
+                margin: 2px 0;
+            }
+            QSlider::handle:horizontal {
+                background: white;
+                border: 1px solid #565a5e;
+                width: 10px;
+                margin: -4px 0;
+                border-radius: 3px;
+            }
+        """)
 
 
 
@@ -628,7 +601,7 @@ class LightSimulationApp(QMainWindow):
         # Wavelength slider
         wavelength_layout = QHBoxLayout()
         wavelength_label = QLabel("Wavelength:")
-        self.wavelength_slider = QSlider(Qt.Horizontal)
+        self.wavelength_slider = ColoredSlider()  # Use the custom slider
         self.wavelength_slider.setMinimum(380)
         self.wavelength_slider.setMaximum(750)
         self.wavelength_slider.setValue(550)
@@ -684,11 +657,9 @@ class LightSimulationApp(QMainWindow):
 
         # Add interference mode checkbox next to other mode controls
         mode_layout = QHBoxLayout()
-        self.refraction_check = QCheckBox("Show Refraction Components")
         self.white_light_check = QCheckBox("White Light")
         self.interference_check = QCheckBox("Show Interference")
 
-        mode_layout.addWidget(self.refraction_check)
         mode_layout.addWidget(self.white_light_check)
         mode_layout.addWidget(self.interference_check)
         wave_layout.addLayout(mode_layout)
@@ -809,17 +780,14 @@ class LightSimulationApp(QMainWindow):
 
         self.interference_check.stateChanged.connect(self.toggle_interference)
         
-        self.refraction_check.stateChanged.connect(self.toggle_refraction)
+
 
     def toggle_interference(self, state):
         """Toggle interference visualization"""
         enabled = state == Qt.Checked
         self.wave_widget.toggle_interference(enabled)
     
-    def toggle_refraction(self, state):
-        """Toggle reflection visualization"""
-        enabled = state == Qt.Checked
-        self.wave_widget.toggle_refraction(enabled)
+
     
     
     def on_tab_changed(self, index):
