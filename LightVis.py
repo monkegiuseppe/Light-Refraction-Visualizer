@@ -63,25 +63,35 @@ class WaveSimulationWidget(pg.PlotWidget):
         super().__init__(parent)
         self.parent = parent
 
+        # Create font
+        plot_font = QFont("Foto")
+
         # Set up the plot
         self.setAntialiasing(True)
         self.setBackground('k')
         self.setLabel('left', 'Amplitude', color='w')
         self.setLabel('bottom', 'Position', color='w')
-        self.setTitle('Light Wave Refraction Visualization', color='w')
+
+       
+       
+
         
         # Add grid
-        self.showGrid(x=True, y=True, alpha=0.5)
+        self.showGrid(x=True, y=True, alpha=0.3)
         self.getPlotItem().getAxis('left').setPen('w')
         self.getPlotItem().getAxis('bottom').setPen('w')
 
         # Hide the auto-range button
         self.getPlotItem().hideButtons()
+        
 
         # Set grid line spacing
         self.getPlotItem().getAxis('left').setTicks([[(i, str(i)) for i in range(-2, 3, 1)]])
         self.getPlotItem().getAxis('bottom').setTicks([[(i, str(i)) for i in range(0, 3001, 500)]])
-        
+
+        # Set up the x-axis
+        self.x = np.linspace(0, 3000, 3000)
+
         # Initial parameters
         self.wavelength = 550
         self.amplitude = 5
@@ -93,11 +103,34 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.time = 0
         self.angle_of_incidence = 0
 
+        # Add refracted wave curves
+        self.refracted_wave1 = self.plot(self.x, np.zeros_like(self.x), 
+                                       pen=pg.mkPen('y', width=2, style=Qt.DashLine))
+        self.refracted_wave2 = self.plot(self.x, np.zeros_like(self.x), 
+                                       pen=pg.mkPen('y', width=2, style=Qt.DashLine))
+        
+         # Hide refracted waves initially
+        self.refracted_wave1.setVisible(False)
+        self.refracted_wave2.setVisible(False)
+        self.show_refraction = False
+
+        # Add interference wave curves
+        self.interference_wave1 = self.plot(self.x, np.zeros_like(self.x), 
+                                          pen=pg.mkPen('r', width=2, style=Qt.DashLine))
+        self.interference_wave2 = self.plot(self.x, np.zeros_like(self.x), 
+                                          pen=pg.mkPen('g', width=2, style=Qt.DashLine))
+        
+        # Hide interference waves initially
+        self.interference_wave1.setVisible(False)
+        self.interference_wave2.setVisible(False)
+        self.show_interference = False
+        
+
         # Define boundaries
         self.boundary1 = 1000
         self.boundary2 = 2000
         
-        # Add angle labels at boundaries (MOVE THIS UP)
+        # Add angle labels at boundaries 
         self.angle1_label = pg.TextItem("θ₁: 0°", anchor=(0.5, 0), color='w')
         self.angle1_label.setPos(self.boundary1 - 100, -1.5)
 
@@ -117,8 +150,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         
     
         
-        # Set up the x-axis
-        self.x = np.linspace(0, 3000, 3000)
+        
         # Set fixed Y-axis range to show waves better
         self.setXRange(0, 3000, padding=0)
         self.setYRange(-2, 2, padding=0)
@@ -170,13 +202,15 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Add medium labels
         self.medium1_label = pg.TextItem(f'{self.current_medium1} (n₁ = {self.n1:.4f})', anchor=(0.5, 0), color='w')
         self.medium1_label.setPos(self.boundary1/2, 40)
-        self.medium1_label.setFont(QFont("Arial", 12, QFont.Bold))
+        self.medium1_label.setFont(QFont("Foto", 12, QFont.Bold))
         
         self.medium2_label = pg.TextItem(f'{self.current_medium2} (n₂ = {self.n2:.4f})', anchor=(0.5, 0), color='w')
         self.medium2_label.setPos(self.boundary1 + (self.boundary2-self.boundary1)/2, 40)
+        self.medium2_label.setFont(QFont("Foto", 12, QFont.Bold))
         
         self.medium3_label = pg.TextItem(f'{self.current_medium3} (n₃ = {self.n3:.4f})', anchor=(0.5, 0), color='w')
         self.medium3_label.setPos(self.boundary2 + (3000-self.boundary2)/2, 40)
+        self.medium3_label.setFont(QFont("Foto", 12, QFont.Bold))
         
         self.addItem(self.medium1_label)
         self.addItem(self.medium2_label)
@@ -213,6 +247,57 @@ class WaveSimulationWidget(pg.PlotWidget):
          # Create the wave curve for single wavelength
         wave = self.calculate_wave(self.wavelength)
         self.wave_curve = self.plot(self.x, wave, pen=pg.mkPen('b', width=4))
+
+    def toggle_refraction(self, enabled):
+        """Toggle visibility of refracted waves"""
+        self.show_refraction = enabled
+        self.refracted_wave1.setVisible(enabled)
+        self.refracted_wave2.setVisible(enabled)
+
+    def calculate_refracted_wave(self, wavelength, boundary_pos, n1, n2):
+        """Calculate reflected wave at boundary"""
+        wave = np.zeros_like(self.x)
+        
+        # Only calculate reflection before the boundary
+        mask = self.x >= boundary_pos
+        x = self.x[mask] - boundary_pos
+
+         # Calculate refraction angle using Snell's law
+        angle_incidence = np.radians(self.angle_of_incidence)
+
+        k = (2 * np.pi * n2) / wavelength
+        omega = self.speed
+
+        y = np.linspace(-2, 2, len(self.x))[mask]
+
+        # Calculate reflected wave with negative angle
+        x_comp = x * np.cos(angle_refraction)
+        y_comp = y * np.sin(angle_refraction)
+
+        phase = k * (x_comp + y_comp) - omega * self.time
+        wave[mask] = self.amplitude * self.visualization_scale * np.sin(phase)
+        
+        return wave
+    
+    
+    def calculate_interference_waves(self, wavelength):
+        """Calculate the component waves that create interference"""
+        wave = np.zeros_like(self.x)
+        
+        # Calculate incident wave continuing straight (wave1)
+        angle_incidence = np.radians(self.angle_of_incidence)
+        k1 = (2 * np.pi * self.n1) / wavelength
+        
+        # Wave 1 - incident wave continuing straight
+        wave1 = np.zeros_like(self.x)
+        phase1 = k1 * self.x - self.speed * self.time
+        wave1 = self.amplitude * self.visualization_scale * np.sin(phase1)
+        
+        # Wave 2 - additional wave that creates interference
+        wave2 = np.zeros_like(self.x)
+        wave2 = self.calculate_wave(wavelength) - wave1
+        
+        return wave1, wave2
         
     def calculate_wave(self, wavelength):
         """Calculate the wave based on current parameters for a specific wavelength"""
@@ -236,6 +321,8 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Angle of incidence in radians
         angle_incidence = np.radians(self.angle_of_incidence)
+        angle_refraction1 = np.arcsin(np.sin(angle_incidence) * self.n1 / n2_wl)
+        angle_refraction2 = np.arcsin(np.sin(angle_refraction1) * n2_wl / n3_wl)
         
         # Snell's law to calculate refraction angles
         angle_refraction1 = np.arcsin(np.sin(angle_incidence) / self.n2)
@@ -253,25 +340,30 @@ class WaveSimulationWidget(pg.PlotWidget):
         k2 = (2 * np.pi * n2_wl) / wavelength    # Wave number in medium 2
         k3 = (2 * np.pi * n3_wl) / wavelength    # Wave number in medium 3
         
+        # Create y-coordinates for vertical displacement
+        y = np.linspace(-1, 1, len(self.x))
+
         omega = self.speed  # Angular frequency
         
-        # Calculate wave in medium 1
+        # Calculate wave in medium 1 with angular propagation
         mask1 = self.x <= self.boundary1
-        phase1 = k1 * self.x[mask1] * np.cos(angle_incidence) - omega * self.time
+        x1 = self.x[mask1]
+        phase1 = k1 * (x1 * np.cos(angle_incidence) + y[mask1] * np.sin(angle_incidence)) - self.speed * self.time
         wave[mask1] = self.amplitude * self.visualization_scale * np.sin(phase1)
-
-        phase_shift1 = k1 * self.boundary1 * np.cos(angle_incidence) - omega * self.time
         
-        # Calculate wave in medium 2
+        # Calculate wave in medium 2 with angular propagation
         mask2 = (self.x > self.boundary1) & (self.x <= self.boundary2)
-        phase2 = k2 * (self.x[mask2] - self.boundary1) * np.cos(angle_refraction1) + phase_shift1
+        x2 = self.x[mask2] - self.boundary1
+        phase2 = (k2 * (x2 * np.cos(angle_refraction1) + y[mask2] * np.sin(angle_refraction1)) + 
+              k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
         wave[mask2] = self.amplitude * self.visualization_scale * np.sin(phase2)
-        
-        phase_shift2 = k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1) + phase_shift1
 
-        # Calculate wave in medium 3
+        # Calculate wave in medium 3 with angular propagation
         mask3 = self.x > self.boundary2
-        phase3 = k3 * (self.x[mask3] - self.boundary2) * np.cos(angle_refraction2) + phase_shift2
+        x3 = self.x[mask3] - self.boundary2
+        phase3 = (k3 * (x3 * np.cos(angle_refraction2) + y[mask3] * np.sin(angle_refraction2)) +
+              k1 * self.boundary1 * np.cos(angle_incidence) +
+              k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1)) - self.speed * self.time
         wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
         
         return wave
@@ -279,16 +371,50 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_animation(self):
         """Update the animation for each timer tick"""
         self.time += 0.01
-        
+    
         if self.white_light:
-            # Update multiple waves with different wavelengths
+        # Update multiple waves with different wavelengths
             for wl, curve in self.wave_curves:
                 wave = self.calculate_wave(wl)
                 curve.setData(self.x, wave)
+            
+            if self.show_interference:
+                wave1, wave2 = self.calculate_interference_waves(wl)
+                self.interference_wave1.setData(self.x, wave1)
+                self.interference_wave2.setData(self.x, wave2)
+                
+            if self.show_refraction:
+                    refr1 = self.calculate_refracted_wave(wl, self.boundary1, self.n1, self.n2)
+                    refr2 = self.calculate_refracted_wave(wl, self.boundary2, self.n2, self.n3)
+                    self.refracted_wave1.setData(self.x, refr1)
+                    self.refracted_wave2.setData(self.x, refr2)
         else:
-            # Update single wave
+        # Update single wave
             wave = self.calculate_wave(self.wavelength)
             self.wave_curve.setData(self.x, wave)
+        
+        if self.show_interference:
+            wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+            self.interference_wave1.setData(self.x, wave1)
+            self.interference_wave2.setData(self.x, wave2)
+            
+        if self.show_refraction:
+            refr1 = self.calculate_refracted_wave(self.wavelength, self.boundary1, self.n1, self.n2)
+            refr2 = self.calculate_refracted_wave(self.wavelength, self.boundary2, self.n2, self.n3)
+            self.refracted_wave1.setData(self.x, refr1)
+            self.refracted_wave2.setData(self.x, refr2)
+
+    def toggle_refraction(self, enabled):
+        """Toggle visibility of reflected waves"""
+        self.show_refraction = enabled
+        self.refracted_wave1.setVisible(enabled)
+        self.refracted_wave2.setVisible(enabled)
+
+    def toggle_interference(self, enabled):
+        """Toggle visibility of interference waves"""
+        self.show_interference = enabled
+        self.interference_wave1.setVisible(enabled)
+        self.interference_wave2.setVisible(enabled)
         
     def update_plot(self):
         """Update the plot with current parameters"""
@@ -301,6 +427,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.medium1_region.setBrush(QBrush(QColor(*self.medium_colors[self.current_medium1])))
         self.medium2_region.setBrush(QBrush(QColor(*self.medium_colors[self.current_medium2])))
         self.medium3_region.setBrush(QBrush(QColor(*self.medium_colors[self.current_medium3])))
+
         
         # Update wavelength color for single wave mode
         if not self.white_light:
@@ -370,11 +497,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         for _, curve in self.wave_curves:
             curve.setVisible(enabled)
         
-        # Update title
-        if enabled:
-            self.setTitle('White Light Dispersion (Prism Effect)')
-        else:
-            self.setTitle('Light Wave Refraction Visualization')
 
 
 
@@ -383,38 +505,64 @@ class LightSimulationApp(QMainWindow):
         super().__init__()
         
         self.setWindowTitle("Light Wave Refraction Simulation")
-        self.setGeometry(100, 100, 1000, 800)
+        self.setGeometry(100, 100, 1200, 800)
         
         # Set dark mode stylesheet
         self.setStyleSheet("""
-            QWidget {
-                background-color: #2b2b2b;
-                color: #ffffff;
-            }
-            QGroupBox {
-                border: 1px solid #ffffff;
-                margin-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 3px;
-            }
-            QLabel, QSlider, QComboBox, QCheckBox, QPushButton {
-                color: #ffffff;
-            }
-            QTabWidget::pane {
-                border: 1px solid #ffffff;
-            }
-            QTabBar::tab {
-                background: #3c3c3c;
-                color: #ffffff;
-                padding: 5px;
-            }
-            QTabBar::tab:selected {
-                background: #2b2b2b;
-            }
-        """)
+        QMainWindow {
+            background-color: #2b2b2b;
+            font-family: 'Foto';
+        }
+        QWidget {
+            background-color: #2b2b2b;
+            color: #ffffff;
+            font-family: 'Foto';
+        }
+        QGroupBox {
+            border: 1px solid #ffffff;
+            margin-top: 10px;
+            padding-top: 10px;
+            font-family: 'Foto';
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 0 3px;
+            color: #ffffff;
+            font-family: 'Foto';
+        }
+        QLabel {
+            color: #ffffff;
+            font-family: 'Foto';
+        }
+        QSlider {
+            background-color: transparent;
+        }
+        QSlider::handle {
+            background-color: #ffffff;
+        }
+        QComboBox {
+            color: #ffffff;
+            background-color: #3c3c3c;
+            selection-background-color: #404040;
+            border: 1px solid #ffffff;
+            font-family: 'Foto';
+        }
+        QPushButton {
+            color: #ffffff;
+            background-color: #3c3c3c;
+            border: 1px solid #ffffff;
+            padding: 5px;
+            font-family: 'Foto';
+        }
+        QPushButton:hover {
+            background-color: #404040;
+        }
+        QCheckBox {
+            color: #ffffff;
+            font-family: 'Foto';
+        }
+    """)
 
         # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
@@ -443,48 +591,33 @@ class LightSimulationApp(QMainWindow):
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
         
+        # Main vertical layout
         self.main_layout = QVBoxLayout()
+        self.main_layout.setSpacing(0)
         self.main_widget.setLayout(self.main_layout)
-        
-        # Create tabs for different modes
-        self.tabs = QTabWidget()
-        self.main_layout.addWidget(self.tabs)
-        
-        # Create the wave tab
-        self.wave_tab = QWidget()
-        self.wave_layout = QVBoxLayout()
-        self.wave_tab.setLayout(self.wave_layout)
         
         # Create the wave visualization
         self.wave_widget = WaveSimulationWidget()
-        self.wave_layout.addWidget(self.wave_widget)
-        
-        # Add wave controls
-        self.setup_wave_controls()
-        
-       
-        
-       
-        
-       
-        
-        # Add tabs to the tab widget
-        self.tabs.addTab(self.wave_tab, "Wave Refraction")
-        
-        
-        # Connect the tab change event
-        self.tabs.currentChanged.connect(self.on_tab_changed)
-    
-    def setup_wave_controls(self):
-        """Set up the control panel for wave simulation"""
-        # Create controls container
+        self.main_layout.addWidget(self.wave_widget, stretch=1)
+
+        # Create and add controls
         controls_container = QWidget()
+        controls_container.setMaximumHeight(200)
+        controls_container.setMinimumHeight(200)
         controls_layout = QHBoxLayout()
         controls_container.setLayout(controls_layout)
+
+
         
         
-        # Add to main layout
-        self.wave_layout.addWidget(controls_container)
+        # Add wave controls
+        self.setup_wave_controls(controls_layout)
+        
+        self.main_layout.addWidget(controls_container)
+    
+    def setup_wave_controls(self,controls_layout):
+        """Set up the control panel for wave simulation"""
+        
         
         # Left controls group (wave properties)
         wave_group = QGroupBox("Wave Properties")
@@ -548,20 +681,18 @@ class LightSimulationApp(QMainWindow):
         angle_layout.addWidget(self.angle_value)
         wave_layout.addLayout(angle_layout)
 
-        # Snell's law calculations display
-        self.snells_law_label = QLabel("Snell's Law: n₁sin(θ₁) = n₂sin(θ₂)")
-        wave_layout.addWidget(self.snells_law_label)
 
-       
-        
-        # Simulation modes
+        # Add interference mode checkbox next to other mode controls
         mode_layout = QHBoxLayout()
-        self.prism_mode_check = QCheckBox("Enable Dispersion")
+        self.refraction_check = QCheckBox("Show Refraction Components")
         self.white_light_check = QCheckBox("White Light")
-        
-        mode_layout.addWidget(self.prism_mode_check)
+        self.interference_check = QCheckBox("Show Interference")
+
+        mode_layout.addWidget(self.refraction_check)
         mode_layout.addWidget(self.white_light_check)
+        mode_layout.addWidget(self.interference_check)
         wave_layout.addLayout(mode_layout)
+        
         
         # Middle group (medium 1)
         medium1_group = QGroupBox("Medium 1")
@@ -675,6 +806,20 @@ class LightSimulationApp(QMainWindow):
         self.white_light_check.stateChanged.connect(self.toggle_white_light)
         
         apply_button.clicked.connect(self.apply_scenario)
+
+        self.interference_check.stateChanged.connect(self.toggle_interference)
+        
+        self.refraction_check.stateChanged.connect(self.toggle_refraction)
+
+    def toggle_interference(self, state):
+        """Toggle interference visualization"""
+        enabled = state == Qt.Checked
+        self.wave_widget.toggle_interference(enabled)
+    
+    def toggle_refraction(self, state):
+        """Toggle reflection visualization"""
+        enabled = state == Qt.Checked
+        self.wave_widget.toggle_refraction(enabled)
     
     
     def on_tab_changed(self, index):
@@ -706,48 +851,45 @@ class LightSimulationApp(QMainWindow):
         n = value / 100
         self.n1_value.setText(f"{n:.4f}")
         self.wave_widget.update_n1(n)
-        self.update_snells_law()
+  
         
     def update_n2(self, value):
         """Update refractive index of medium 2"""
         n = value / 100
         self.n2_value.setText(f"{n:.4f}")
         self.wave_widget.update_n2(n)
-        self.update_snells_law()
+
         
     def update_n3(self, value):
         """Update refractive index of medium 3"""
         n = value / 100
         self.n3_value.setText(f"{n:.4f}")
         self.wave_widget.update_n3(n)
-        self.update_snells_law()
 
-    def update_snells_law(self):
-        """Update Snell's law calculations display"""
-        n1 = self.wave_widget.n1
-        n2 = self.wave_widget.n2
-        angle_incidence = self.wave_widget.angle_of_incidence
-        angle_incidence_rad = np.radians(angle_incidence)
-        angle_refraction = np.degrees(np.arcsin(np.sin(angle_incidence_rad) * n1 / n2))
-        self.snells_law_label.setText(f"Snell's Law: {n1:.4f}sin({angle_incidence}°) = {n2:.4f}sin({angle_refraction:.2f}°)")
+
+ 
         
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
         n = self.medium_presets[medium_name]
         self.n1_slider.setValue(int(n * 100))
+        self.wave_widget.n1 = n
         self.wave_widget.update_medium1(medium_name)
         
     def update_medium2(self, medium_name):
         """Update medium 2 selection"""
         n = self.medium_presets[medium_name]
         self.n2_slider.setValue(int(n * 100))
+        self.wave_widget.n2 = n
         self.wave_widget.update_medium2(medium_name)
         
     def update_medium3(self, medium_name):
         """Update medium 3 selection"""
         n = self.medium_presets[medium_name]
         self.n3_slider.setValue(int(n * 100))
+        self.wave_widget.n3 = n
         self.wave_widget.update_medium3(medium_name)
+    
         
     
 
@@ -775,13 +917,16 @@ class LightSimulationApp(QMainWindow):
         self.medium2_combo.setCurrentText(medium2)
         self.medium3_combo.setCurrentText(medium3)
 
+        n1 = self.medium_presets[medium1]
+        n2 = self.medium_presets[medium2]
+        n3 = self.medium_presets[medium3]
+
     def update_angle(self, value):
         """Update angle of incidence"""
         self.angle_value.setText(f"{value}°")
         self.wave_widget.angle_of_incidence = value
         self.wave_widget.update_plot()
-        self.update_snells_law()
-    
+
 
 # Run the application
 if __name__ == "__main__":
