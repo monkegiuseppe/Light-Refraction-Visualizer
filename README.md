@@ -1,8 +1,9 @@
 # Animated Interactive Light Refraction Visualizer
 Interactive Light Refraction Visualizer
 
-![image](https://github.com/user-attachments/assets/77d534e3-b71d-4eb3-91b1-df76379e9bb4)
+![image](https://github.com/user-attachments/assets/60508251-6897-4c2f-96dc-cd9f5f681f4f)
 
-![image](https://github.com/user-attachments/assets/b856eef4-3352-4249-99d9-0bd255d680f1)
 
-![image](https://github.com/user-attachments/assets/35befeb7-2674-4ab2-979d-fb16fbe0494a)
+![image](https://github.com/user-attachments/assets/808b57d4-4e70-488a-b394-4d51ed2585ee)
+
+![image](https://github.com/user-attachments/assets/9b75eb7f-b733-4598-8369-0aa83ef43c49)
