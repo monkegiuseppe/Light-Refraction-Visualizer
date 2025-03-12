@@ -120,6 +120,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.n3 = 1.52    # Glass (Crown)
         self.time = 0
         self.angle_of_incidence = 0  # Default angle is 0 (straight line)
+        self.ray_target_y = 0  # Y-coordinate where ray hits first boundary
         
         # Initialize flags
         self.show_interference = False
@@ -733,32 +734,50 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
         if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
-            n = self.medium_presets[medium_name]['n']
-            self.n1_slider.setValue(int(n * 100))
-            self.n1_value.setText(f"{n:.4f}")
+            # Update the refractive index directly
+            self.n1 = self.medium_presets[medium_name]['n']
             
-            # Update the wave widget
-            self.wave_widget.update_medium1(medium_name)
+            # Update medium color in the visualization
+            if medium_name in self.medium_colors:
+                self.medium1_region.setBrush(QBrush(QColor(*self.medium_colors[medium_name])))
+                
+            # Update medium label
+            self.medium1_label.setText(f'{medium_name} (n₁ = {self.n1:.4f})')
+            
+            # Update the visualization
+            self.update_plot()
         
     def update_medium2(self, medium_name):
         """Update medium 2 selection"""
         if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
-            n = self.medium_presets[medium_name]['n']
-            self.n2_slider.setValue(int(n * 100))
-            self.n2_value.setText(f"{n:.4f}")
+            # Update the refractive index directly
+            self.n2 = self.medium_presets[medium_name]['n']
             
-            # Update the wave widget
-            self.wave_widget.update_medium2(medium_name)
+            # Update medium color in the visualization
+            if medium_name in self.medium_colors:
+                self.medium2_region.setBrush(QBrush(QColor(*self.medium_colors[medium_name])))
+                
+            # Update medium label
+            self.medium2_label.setText(f'{medium_name} (n₂ = {self.n2:.4f})')
+            
+            # Update the visualization
+            self.update_plot()
         
     def update_medium3(self, medium_name):
         """Update medium 3 selection"""
         if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
-            n = self.medium_presets[medium_name]['n']
-            self.n3_slider.setValue(int(n * 100))
-            self.n3_value.setText(f"{n:.4f}")
+            # Update the refractive index directly
+            self.n3 = self.medium_presets[medium_name]['n']
             
-            # Update the wave widget
-            self.wave_widget.update_medium3(medium_name)
+            # Update medium color in the visualization
+            if medium_name in self.medium_colors:
+                self.medium3_region.setBrush(QBrush(QColor(*self.medium_colors[medium_name])))
+                
+            # Update medium label
+            self.medium3_label.setText(f'{medium_name} (n₃ = {self.n3:.4f})')
+            
+            # Update the visualization
+            self.update_plot()
         
     def toggle_prism_mode(self, enabled):
         """Toggle between normal and prism simulation mode"""
@@ -771,14 +790,40 @@ class WaveSimulationWidget(pg.PlotWidget):
         if enabled:
             # Create the curves for visible spectrum
             self.create_white_light_curves()
+            
+            # Hide the original single wavelength curve when in white light mode
+            self.wave_curve.setVisible(False)
+        else:
+            # Show the original single wavelength curve when not in white light mode
+            self.wave_curve.setVisible(True)
         
         # Update visibility of wave curves
         for wl, curve in self.wave_curves:
             curve.setVisible(enabled)
 
     def create_white_light_curves(self):
-        # Implementation of create_white_light_curves method
-        pass
+        """Create curves for multiple wavelengths to simulate white light"""
+        # Clear existing curves if any
+        if hasattr(self, 'wave_curves'):
+            for wl, curve in self.wave_curves:
+                self.removeItem(curve)
+                
+        self.wave_curves = []
+        
+        # Create curves for different wavelengths in the visible spectrum
+        for wl in self.prism_wavelengths:
+            # Calculate wave for this wavelength
+            wave = self.calculate_wave(wl)
+            
+            # Get color for this wavelength
+            r, g, b = wavelength_to_rgb(wl)
+            wave_color = QColor(r, g, b)
+            
+            # Create curve with this color
+            curve = self.plot(self.x, wave, pen=pg.mkPen(wave_color, width=3))
+            
+            # Store wavelength and curve
+            self.wave_curves.append((wl, curve))
 
     def update_ray_lines(self):
         """Update the ray lines to visualize refraction angles"""
@@ -815,7 +860,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             angle_incidence_rad = np.radians(self.angle_of_incidence)
             
             # Set target y-position for the ray to hit at the first boundary
-            target_y = 0
+            target_y = self.ray_target_y
             boundary1_y = target_y
             
             # Calculate where to start the ray to hit the boundary
@@ -1011,6 +1056,12 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_angle(self, value):
         """Update the angle of incidence"""
         self.angle_of_incidence = value
+        if self.show_ray_mode:
+            self.update_ray_lines()
+
+    def set_ray_target_y(self, y_value):
+        """Set the Y-coordinate where the ray hits the first boundary"""
+        self.ray_target_y = y_value
         if self.show_ray_mode:
             self.update_ray_lines()
 
@@ -1249,6 +1300,20 @@ class LightSimulationApp(QMainWindow):
         angle_layout.addWidget(self.angle_value)
         wave_layout.addLayout(angle_layout)
 
+        # Ray target Y position slider
+        ray_target_layout = QHBoxLayout()
+        ray_target_label = QLabel("Ray Target Y:")
+        self.ray_target_slider = BlueSlider()
+        self.ray_target_slider.setMinimum(-100)
+        self.ray_target_slider.setMaximum(100)
+        self.ray_target_slider.setValue(0)
+        self.ray_target_value = QLabel("0.0")
+        
+        ray_target_layout.addWidget(ray_target_label)
+        ray_target_layout.addWidget(self.ray_target_slider)
+        ray_target_layout.addWidget(self.ray_target_value)
+        wave_layout.addLayout(ray_target_layout)
+
         # Add interference mode checkbox next to other mode controls
         mode_layout = QHBoxLayout()
         self.white_light_check = QCheckBox("White Light")
@@ -1260,6 +1325,9 @@ class LightSimulationApp(QMainWindow):
         mode_layout.addWidget(self.interference_check)
         mode_layout.addWidget(self.ray_mode_check)
         wave_layout.addLayout(mode_layout)
+        
+        
+        
         
         
         
@@ -1369,6 +1437,7 @@ class LightSimulationApp(QMainWindow):
         self.amplitude_slider.valueChanged.connect(self.update_amplitude)
         self.speed_slider.valueChanged.connect(self.update_speed)
         self.angle_slider.valueChanged.connect(self.update_angle)
+        self.ray_target_slider.valueChanged.connect(self.update_ray_target)
 
         self.n1_slider.valueChanged.connect(self.update_n1)
         self.n2_slider.valueChanged.connect(self.update_n2)
@@ -1446,32 +1515,50 @@ class LightSimulationApp(QMainWindow):
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
         if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
-            n = self.medium_presets[medium_name]['n']
-            self.n1_slider.setValue(int(n * 100))
-            self.n1_value.setText(f"{n:.4f}")
+            # Update the refractive index directly
+            self.n1 = self.medium_presets[medium_name]['n']
             
-            # Update the wave widget
-            self.wave_widget.update_medium1(medium_name)
+            # Update medium color in the visualization
+            if medium_name in self.medium_colors:
+                self.medium1_region.setBrush(QBrush(QColor(*self.medium_colors[medium_name])))
+                
+            # Update medium label
+            self.medium1_label.setText(f'{medium_name} (n₁ = {self.n1:.4f})')
+            
+            # Update the visualization
+            self.update_plot()
         
     def update_medium2(self, medium_name):
         """Update medium 2 selection"""
         if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
-            n = self.medium_presets[medium_name]['n']
-            self.n2_slider.setValue(int(n * 100))
-            self.n2_value.setText(f"{n:.4f}")
+            # Update the refractive index directly
+            self.n2 = self.medium_presets[medium_name]['n']
             
-            # Update the wave widget
-            self.wave_widget.update_medium2(medium_name)
+            # Update medium color in the visualization
+            if medium_name in self.medium_colors:
+                self.medium2_region.setBrush(QBrush(QColor(*self.medium_colors[medium_name])))
+                
+            # Update medium label
+            self.medium2_label.setText(f'{medium_name} (n₂ = {self.n2:.4f})')
+            
+            # Update the visualization
+            self.update_plot()
         
     def update_medium3(self, medium_name):
         """Update medium 3 selection"""
         if hasattr(self, 'medium_presets') and medium_name in self.medium_presets:
-            n = self.medium_presets[medium_name]['n']
-            self.n3_slider.setValue(int(n * 100))
-            self.n3_value.setText(f"{n:.4f}")
+            # Update the refractive index directly
+            self.n3 = self.medium_presets[medium_name]['n']
             
-            # Update the wave widget
-            self.wave_widget.update_medium3(medium_name)
+            # Update medium color in the visualization
+            if medium_name in self.medium_colors:
+                self.medium3_region.setBrush(QBrush(QColor(*self.medium_colors[medium_name])))
+                
+            # Update medium label
+            self.medium3_label.setText(f'{medium_name} (n₃ = {self.n3:.4f})')
+            
+            # Update the visualization
+            self.update_plot()
         
     def toggle_white_light(self, state):
         """Toggle white light mode"""
@@ -1514,6 +1601,15 @@ class LightSimulationApp(QMainWindow):
         # Update ray visualization
         if self.wave_widget.show_ray_mode:
             self.wave_widget.update_ray_lines()
+            
+    def update_ray_target(self, value):
+        """Update the ray target Y position"""
+        # Scale the slider value to a smaller range for better control
+        y_value = value / 100.0
+        # Update label
+        self.ray_target_value.setText(f"{y_value:.1f}")
+        # Update target position in wave widget
+        self.wave_widget.set_ray_target_y(y_value)
             
     def toggle_ray_mode(self, state):
         """Toggle ray mode"""
