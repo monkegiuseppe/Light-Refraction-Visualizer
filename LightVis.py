@@ -153,10 +153,14 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.time = 0.0
         self.visualization_scale = 0.1
         # Initialize colors for mediums
-        self.medium1_color = '#171717'  # Dark blue
-        self.medium2_color = '#16213e'  # Medium blue
-        self.medium3_color = '#524d41'  # Gray-blue
+        self.medium1_color = '#3d3e40'  
+        self.medium2_color = '#16213e'  
+        self.medium3_color = '#524d41'  
         
+        self.medium1_name = 'Air'
+        self.medium2_name = 'Water'
+        self.medium3_name = 'Glass (Crown)'
+
         # Initialize parameters
         self.frequency = 545  # nm
         self.amplitude = 1.0
@@ -172,20 +176,26 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.prism_frequencies = np.linspace(400, 790, 10)
         self.prism_wavelengths = [299792.458 / freq for freq in self.prism_frequencies]
         # Initialize medium properties
-        self.n1 = 1.0  # Air
-        self.n2 = 1.33  # Water
-        self.n3 = 1.5  # Glass
+        self.n1 = 1.0  
+        self.n2 = 1.33  
+        self.n3 = 1.5  
         
         # Initialize boundaries
         self.boundary1 = 1000  # First boundary position
         self.boundary2 = 2000  # Second boundary position
         
-        # Create the plot
-        self.setBackground('k')
-        self.setTitle("Wave Simulation")
-        self.setLabel('left', 'Amplitude')
-        self.setLabel('bottom', 'Position (nm)')
-        self.showGrid(x=True, y=True)
+        # Create the plot with a transparent background
+        self.setBackground(None)  
+        self.getPlotItem().setTitle("")  
+        self.getPlotItem().hideAxis('left') 
+        self.getPlotItem().hideAxis('bottom')  
+
+        # Configure a thin, visible grid
+        grid_pen = pg.mkPen(color=(255, 255, 255, 80), width=0.5, style=Qt.DotLine)
+        
+        self.getPlotItem().getAxis('left').setPen(grid_pen)
+        self.getPlotItem().getAxis('bottom').setPen(grid_pen)
+        
         
         # Disable mouse interaction and context menu
         self.setMouseEnabled(x=False, y=False)
@@ -203,8 +213,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.x = np.linspace(0, 3000, 6000)
  
         
-      
-        
         # Initialize all container lists first
         self.wave_curves = []   # Initialize wave_curves list
         
@@ -213,10 +221,27 @@ class WaveSimulationWidget(pg.PlotWidget):
 
         # Set up the plot
         self.setAntialiasing(True)
-        self.setBackground('k')
-        self.setLabel('left', 'Amplitude', color='w')
-        self.setLabel('bottom', 'Position', color='w')
+
+        # Create custom grid lines that will be drawn on top
+        self.grid_lines_x = []
+        self.grid_lines_y = []
         
+       # Horizontal gridlines
+        for y in np.arange(-2, 3, 1):
+            line = pg.InfiniteLine(pos=y, angle=0, pen=pg.mkPen(color=(200, 200, 200, 150), width=0.5, style=Qt.DotLine))
+            self.addItem(line)
+            self.grid_lines_y.append(line)
+        
+        # Vertical gridlines
+        for x in np.arange(0, 3001, 500):
+            line = pg.InfiniteLine(pos=x, angle=90, pen=pg.mkPen(color=(200, 200, 200, 150), width=0.5, style=Qt.DotLine))
+            self.addItem(line)
+            self.grid_lines_x.append(line)
+        # Remove the plot border
+        self.getPlotItem().setContentsMargins(0, 0, 0, 0)
+        self.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
+        self.getPlotItem().vb.setContentsMargins(0, 0, 0, 0)
+
         # Set initial view range and disable mouse interaction
         self.setYRange(-2, 2, padding=0)  # Set fixed Y range for waves
         self.setXRange(0, 3000, padding=0)  # Set fixed X range
@@ -234,10 +259,7 @@ class WaveSimulationWidget(pg.PlotWidget):
                 if axis in ['top', 'right']:
                     self.getPlotItem().showAxis(axis, False)
         
-        # Remove the plot border
-        self.getPlotItem().setContentsMargins(0, 0, 0, 0)
-        self.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
-        self.getPlotItem().vb.setContentsMargins(0, 0, 0, 0)
+
 
         # Set grid line spacing
         self.getPlotItem().getAxis('left').setTicks([[(i, str(i)) for i in range(-2, 3, 1)]])
@@ -364,32 +386,28 @@ class WaveSimulationWidget(pg.PlotWidget):
         """Calculate the component waves that create interference"""
         if not self.show_interference:
             return np.zeros_like(self.x), np.zeros_like(self.x)
+            
         # Get the actual refracted wave
         actual_wave = self.calculate_wave(self.frequency)
         
-        # Wave 1 (red) - original wave continuing straight without refraction
+        # Wave 1 (red) - original wave as if it was coming from vacuum (n=1.0)
         wave1 = np.zeros_like(self.x)
-        k1 = (2 * np.pi * self.n1) / wavelength
+        
+        # Calculate vacuum wavelength
+        vacuum_wavelength = wavelength
+        
+        # Calculate wave number for vacuum (n=1.0)
+        k_vacuum = (2 * np.pi * 1.0) / vacuum_wavelength
         
         # Calculate phase with time component to ensure animation
-        phase1 = k1 * self.x - self.speed * self.time
+        phase_vacuum = k_vacuum * self.x - self.speed * self.time
         
-        # In medium 1, the actual wave and the straight wave are identical
-        # (when angle of incidence is 0)
-        mask_medium1 = self.x <= self.boundary1
+        # For all media, calculate the wave as if it was in vacuum (n=1.0)
+        # This represents the original wave without any medium effects
+        wave1 = self.amplitude * self.visualization_scale * np.sin(phase_vacuum)
         
-        # For medium 1, if angle is 0, there's no difference between actual and straight
-        if abs(self.angle_of_incidence) < 0.001:  # Practically zero
-            wave1[mask_medium1] = actual_wave[mask_medium1]
-        else:
-            # If angle is not 0, calculate the straight wave in medium 1
-            wave1[mask_medium1] = self.amplitude * self.visualization_scale * np.sin(phase1[mask_medium1])
-        
-        # For medium 2 and 3, calculate the straight wave as if it continued from medium 1
-        mask_medium23 = self.x > self.boundary1
-        wave1[mask_medium23] = self.amplitude * self.visualization_scale * np.sin(phase1[mask_medium23])
-        
-        # Wave 2 (green) - the difference between actual wave and original wave
+        # Wave 2 (green) - the difference between actual wave and vacuum wave
+        # This represents the effect of the media on the wave
         wave2 = actual_wave - wave1
         
         return wave1, wave2
@@ -449,14 +467,14 @@ class WaveSimulationWidget(pg.PlotWidget):
         k3 = (2 * np.pi * n3_wl) / wavelength    # Wave number in medium 3
         
         # Create y-coordinates for vertical displacement
-        y = np.linspace(-1, 1, len(self.x))
+        y = np.zeros_like(self.x)
 
         omega = self.speed  # Angular frequency
         
         # Calculate wave in medium 1 with angular propagation
         mask1 = self.x <= self.boundary1
         x1 = self.x[mask1]
-        phase1 = k1 * (x1 * np.cos(angle_incidence) + y[mask1] * np.sin(angle_incidence)) - self.speed * self.time
+        phase1 = k1 * x1 - self.speed * self.time
         wave[mask1] = self.amplitude * self.visualization_scale * np.sin(phase1)
         
         # Calculate wave in medium 2 with angular propagation
@@ -466,19 +484,17 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Handle differently based on whether we have total internal reflection
         if 'total_reflection' in locals() and total_reflection and sin_refraction1 > 1:
             # For total internal reflection at first boundary, create reflected wave
-            reflected_angle = np.pi - angle_incidence
-            phase2 = (k1 * (x2 * np.cos(reflected_angle) + y[mask2] * np.sin(reflected_angle)) + 
-                  k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+            phase2 = k1 * x2 + k1 * self.boundary1 - self.speed * self.time
         else:
             # Normal refraction
-            phase2 = (k2 * (x2 * np.cos(angle_refraction1) + y[mask2] * np.sin(angle_refraction1)) + 
-                  k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+            phase2 = k2 * x2 + k1 * self.boundary1 - self.speed * self.time
                   
         wave[mask2] = self.amplitude * self.visualization_scale * np.sin(phase2)
         
         # Calculate wave in medium 3 with angular propagation
         mask3 = self.x > self.boundary2
         x3 = self.x[mask3] - self.boundary2
+        
         
         # Handle differently based on whether we have total internal reflection
         if 'total_reflection' in locals() and total_reflection:
@@ -487,16 +503,11 @@ class WaveSimulationWidget(pg.PlotWidget):
                 wave[mask3] = 0
             elif sin_refraction2 > 1:
                 # Total reflection at second boundary
-                reflected_angle = np.pi - angle_refraction1
-                phase3 = (k2 * (x3 * np.cos(reflected_angle) + y[mask3] * np.sin(reflected_angle)) + 
-                      k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1) +
-                      k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+                phase3 = k2 * x3 + k2 * (self.boundary2 - self.boundary1) + k1 * self.boundary1 - self.speed * self.time
                 wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
         else:
             # Normal refraction to medium 3
-            phase3 = (k3 * (x3 * np.cos(angle_refraction2) + y[mask3] * np.sin(angle_refraction2)) + 
-                  k2 * (self.boundary2 - self.boundary1) * np.cos(angle_refraction1) +
-                  k1 * self.boundary1 * np.cos(angle_incidence)) - self.speed * self.time
+            phase3 = k3 * x3 + k2 * (self.boundary2 - self.boundary1) + k1 * self.boundary1 - self.speed * self.time
             wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
         
         return wave
@@ -612,6 +623,17 @@ class WaveSimulationWidget(pg.PlotWidget):
                 brush=pg.mkBrush(self.medium3_color))
             self.addItem(medium3_rect)
             self.medium_rects.append(medium3_rect)
+
+            # Create wavelength scale bar and labels
+            self.scale_bar = None
+            self.scale_label = None
+            self.scale_title = None
+            
+            # Create initial scale bar (will be updated with wavelength changes)
+            self.update_wavelength_scale()
+            
+            self.medium_rects.append(self.boundary1_line)
+            self.medium_rects.append(self.boundary2_line)
             
             # Add boundary lines
             boundary1_line = pg.InfiniteLine(pos=self.boundary1, angle=90, pen=pg.mkPen('w', width=2, style=Qt.DashLine))
@@ -621,13 +643,20 @@ class WaveSimulationWidget(pg.PlotWidget):
             self.medium_rects.append(boundary1_line)
             self.medium_rects.append(boundary2_line)
             
+             # Bring grid lines to front by removing and re-adding them
+            for line in self.grid_lines_x + self.grid_lines_y:
+                self.removeItem(line)
+                self.addItem(line)
+
+            grid_pen = pg.mkPen(color=(255, 255, 255, 80), width=0.5, style=Qt.DotLine)
+            self.showGrid(x=True, y=True, alpha=0.5)
             # Update medium labels
             # Medium 1
             medium1_color_label = pg.TextItem(f"n₁: {self.n1:.4f}", anchor=(0.5, 0), color='white')
-            medium1_color_label.setPos(self.boundary1 / 2, -1.8)
+            medium1_color_label.setPos(self.boundary1 / 2, -1.2)
             self.addItem(medium1_color_label)
             
-            medium1_name_label = pg.TextItem(f"Medium 1", anchor=(0.5, 1), color='white')
+            medium1_name_label = pg.TextItem(f"{self.medium1_name}", anchor=(0.5, 1), color='white')
             medium1_name_label.setPos(self.boundary1 / 2, 1.8)
             self.addItem(medium1_name_label)
             
@@ -635,21 +664,22 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Medium 2
             medium2_color_label = pg.TextItem(f"n₂: {self.n2:.4f}", anchor=(0.5, 0), color='white')
-            medium2_color_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, -1.8)
+            medium2_color_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, -1.2)
             self.addItem(medium2_color_label)
             
-            medium2_name_label = pg.TextItem(f"Medium 2", anchor=(0.5, 1), color='white')
+            medium2_name_label = pg.TextItem(f"{self.medium2_name}", anchor=(0.5, 1), color='white')
             medium2_name_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, 1.8)
             self.addItem(medium2_name_label)
             
             self.medium_labels.append((medium2_color_label, medium2_name_label, 2))
             
+            
             # Medium 3
             medium3_color_label = pg.TextItem(f"n₃: {self.n3:.4f}", anchor=(0.5, 0), color='white')
-            medium3_color_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, -1.8)
+            medium3_color_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, -1.2)
             self.addItem(medium3_color_label)
             
-            medium3_name_label = pg.TextItem(f"Medium 3", anchor=(0.5, 1), color='white')
+            medium3_name_label = pg.TextItem(f"{self.medium3_name}", anchor=(0.5, 1), color='white')
             medium3_name_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, 1.8)
             self.addItem(medium3_name_label)
             
@@ -703,6 +733,77 @@ class WaveSimulationWidget(pg.PlotWidget):
         if enabled:
             self.update_ray_lines()
 
+
+    def update_wavelength_scale(self):
+        """Update the wavelength scale indicators on the grid"""
+        # Remove existing scale elements if they exist
+        if hasattr(self, 'scale_bar') and self.scale_bar is not None:
+            self.removeItem(self.scale_bar)
+        if hasattr(self, 'scale_label') and self.scale_label is not None:
+            self.removeItem(self.scale_label)
+        if hasattr(self, 'scale_title') and self.scale_title is not None:
+            self.removeItem(self.scale_title)
+            
+        # Remove existing grid value labels if they exist
+        if hasattr(self, 'grid_value_labels'):
+            for label in self.grid_value_labels:
+                self.removeItem(label)
+        
+        # Initialize grid value labels list
+        self.grid_value_labels = []
+
+        vacuum_wavelength_nm = 299792.458 / self.frequency
+        wavelength_m1 = vacuum_wavelength_nm / self.n1
+        wavelength_m2 = vacuum_wavelength_nm / self.n2
+        wavelength_m3 = vacuum_wavelength_nm / self.n3
+
+        c = 299792458  
+        speed_m1 = c / self.n1  
+        speed_m2 = c / self.n2  
+        speed_m3 = c / self.n3
+
+        speed_m1_formatted = f"{1/self.n1:.2f}c"
+        speed_m2_formatted = f"{1/self.n2:.2f}c"
+        speed_m3_formatted = f"{1/self.n3:.2f}c"
+
+        scale_factor = 500 / 500
+        # Add wavelength values to vertical grid lines
+        for x in np.arange(0, 3001, 500):
+            # Calculate corresponding wavelength value
+            physical_nm = x / scale_factor  # Scale to make one grid unit = wavelength/500
+            
+            # Create label with wavelength value
+            label = pg.TextItem(f"{int(physical_nm)} nm", anchor=(0, 0.5), color='white')
+            label.setPos(x+10, -1.9)  # Position below the plot
+            self.addItem(label)
+            self.grid_value_labels.append(label)
+
+        # Add vacuum wavelength reference
+        wavelength_info = pg.TextItem(f"λ₀ = {int(vacuum_wavelength_nm)} nm", 
+                                     anchor=(0, 0), color='yellow')
+        wavelength_info.setPos(50, 1.5)  # Position at top-left
+        self.addItem(wavelength_info)
+        self.grid_value_labels.append(wavelength_info)
+        
+         # Add medium-specific wavelength and speed labels
+        m1_label = pg.TextItem(f"λ₁ = {int(wavelength_m1)} nm | v₁ = {speed_m1_formatted}", 
+                              anchor=(0.5, 0), color='yellow')
+        m1_label.setPos(self.boundary1/2, 1.5)
+        self.addItem(m1_label)
+        self.grid_value_labels.append(m1_label)
+        
+        m2_label = pg.TextItem(f"λ₂ = {int(wavelength_m2)} nm | v₂ = {speed_m2_formatted}", 
+                              anchor=(0.5, 0), color='yellow')
+        m2_label.setPos(self.boundary1 + (self.boundary2-self.boundary1)/2, 1.5)
+        self.addItem(m2_label)
+        self.grid_value_labels.append(m2_label)
+        
+        m3_label = pg.TextItem(f"λ₃ = {int(wavelength_m3)} nm | v₃ = {speed_m3_formatted}", 
+                              anchor=(0.5, 0), color='yellow')
+        m3_label.setPos(self.boundary2 + (3000-self.boundary2)/2, 1.5)
+        self.addItem(m3_label)
+        self.grid_value_labels.append(m3_label)
+
     def update_wavelength(self, value):
         """Update the wavelength and colors"""
         self.frequency = value
@@ -722,8 +823,10 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.ray_refracted1.setPen(ray_color)
                 self.ray_refracted2.setPen(ray_color)
         
-        # Update the wave data
-            # Update interference waves if they're visible
+        # Update the wavelength scale
+        self.update_wavelength_scale()
+        
+        # Update interference waves if they're visible
         if self.show_interference:
             wave1, wave2 = self.calculate_interference_waves(self.wavelength)
             self.interference_wave1.setData(self.x, wave1)
@@ -775,7 +878,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Update the wave widget's n1 value
             self.wave_widget.update_n1(n1)
-            
+            self.wave_widget.medium1_name = medium_name
            
             self.wave_widget.update_plot()
             
@@ -788,7 +891,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Update the wave widget's n2 value
             self.wave_widget.update_n2(n2)
-            
+            self.wave_widget.medium2_name = medium_name
             # Update the wave widget's medium color
 
             self.wave_widget.update_plot()
@@ -802,7 +905,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Update the wave widget's n3 value
             self.wave_widget.update_n3(n3)
-            
+            self.wave_widget.medium3_name = medium_name
             # Update the wave widget's medium color
             self.wave_widget.update_plot()
         
