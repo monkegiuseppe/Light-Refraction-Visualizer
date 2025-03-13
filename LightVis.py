@@ -93,8 +93,6 @@ def wavelength_to_rgb(wavelength):
     elif wavelength > 750:
         wavelength = 750  # Cap at red
     
-    # Normalize wavelength to 0-1 range within visible spectrum
-    normalized = (wavelength - 380) / (750 - 380)
     
     # Convert to RGB using a simplified approximation of visible spectrum
     if 380 <= wavelength < 440:
@@ -153,14 +151,15 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.time = 0.0
         self.visualization_scale = 0.1
         # Initialize colors for mediums
-        self.medium1_color = '#3d3e40'  
-        self.medium2_color = '#16213e'  
-        self.medium3_color = '#524d41'  
+        self.medium1_color = '#3A3A3A80'  
+        self.medium2_color = '#0D47A1C0'  
+        self.medium3_color = '#4488AACC'  
         
         self.medium1_name = 'Air'
         self.medium2_name = 'Water'
         self.medium3_name = 'Glass (Crown)'
 
+        self.medium_presets = {}
         # Initialize parameters
         self.frequency = 545  # nm
         self.amplitude = 1.0
@@ -216,8 +215,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Initialize all container lists first
         self.wave_curves = []   # Initialize wave_curves list
         
-        # Create font
-        plot_font = QFont("Foto")
 
         # Set up the plot
         self.setAntialiasing(True)
@@ -242,12 +239,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
         self.getPlotItem().vb.setContentsMargins(0, 0, 0, 0)
 
-        # Set initial view range and disable mouse interaction
-        self.setYRange(-2, 2, padding=0)  # Set fixed Y range for waves
-        self.setXRange(0, 3000, padding=0)  # Set fixed X range
-        self.getPlotItem().getViewBox().setMouseEnabled(x=False, y=False)  # Disable mouse interaction
-        self.getPlotItem().getViewBox().setMenuEnabled(False)  # Disable context menu
-        
         # Remove the border and axis rectangle
         self.getPlotItem().getViewBox().setBackgroundColor(None)
         self.getPlotItem().getViewBox().setBorder(None)
@@ -282,6 +273,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             brush=pg.mkBrush(self.medium1_color))
         self.addItem(medium1_rect)
         self.medium_rects.append(medium1_rect)
+
         
         # Medium 2 (Water)
         medium2_rect = pg.FillBetweenItem(
@@ -380,13 +372,28 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Set up the animation timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_animation)
-        self.timer.start(30)  # 50ms interval (20 fps)
+        self.timer.start(16)  # 50ms interval (20 fps)
         
     def calculate_interference_waves(self, wavelength):
         """Calculate the component waves that create interference"""
         if not self.show_interference:
             return np.zeros_like(self.x), np.zeros_like(self.x)
             
+        cache_key = (
+            wavelength,
+            self.time,
+            self.frequency,
+            self.n1,
+            self.n2,
+            self.n3,
+            self.amplitude,
+            self.speed
+        )
+
+        if hasattr(self, '_interference_cache') and self._interference_cache.get('key') == cache_key:
+            return self._interference_cache.get('wave1'), self._interference_cache.get('wave2')
+
+
         # Get the actual refracted wave
         actual_wave = self.calculate_wave(self.frequency)
         
@@ -395,7 +402,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Calculate vacuum wavelength
         vacuum_wavelength = wavelength
-        
         # Calculate wave number for vacuum (n=1.0)
         k_vacuum = (2 * np.pi * 1.0) / vacuum_wavelength
         
@@ -410,17 +416,36 @@ class WaveSimulationWidget(pg.PlotWidget):
         # This represents the effect of the media on the wave
         wave2 = actual_wave - wave1
         
+        if not hasattr(self, '_interference_cache'):
+            self._interference_cache = {}
+        self._interference_cache['key'] = cache_key
+        self._interference_cache['wave1'] = wave1
+        self._interference_cache['wave2'] = wave2
+
         return wave1, wave2
         
     def calculate_wave(self, frequency):
         """Calculate the wave based on current parameters for a specific wavelength"""
+
+        cache_key = (
+            frequency, 
+            self.time,
+            self.n1, 
+            self.n2, 
+            self.n3, 
+            self.angle_of_incidence,
+            self.boundary1, 
+            self.boundary2,
+            self.prism_mode
+        )
+
+        if hasattr(self, '_wave_cache') and self._wave_cache.get('key') == cache_key:
+            return self._wave_cache.get('wave')
+
         wave = np.zeros_like(self.x)
         wavelength = 299792.458 / frequency
-        # We need to adjust refractive indices for wavelength in prism mode
-        # This simulates dispersion - different wavelengths refract differently
+        
         if self.prism_mode:
-            # Calculate approximate wavelength in nm (for dispersion calculation)
-            # Map wavelength 10-100 to 380-750nm (visible spectrum)
             wl_nm = wavelength
             
             # Apply Cauchy's equation for dispersion: n(λ) = A + B/λ² + C/λ⁴
@@ -510,40 +535,76 @@ class WaveSimulationWidget(pg.PlotWidget):
             phase3 = k3 * x3 + k2 * (self.boundary2 - self.boundary1) + k1 * self.boundary1 - self.speed * self.time
             wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
         
+        if not hasattr(self, '_wave_cache'):
+            self._wave_cache = {}
+        self._wave_cache['key'] = cache_key
+        self._wave_cache['wave'] = wave
+
         return wave
         
+
     def update_animation(self):
         """Update the animation for each timer tick"""
         if not self.paused:  # Only update time if not paused
             self.time += 0.01
-    
-        if self.white_light:
-            # Update multiple waves with different wavelengths
-            for curve, freq in self.wave_curves:
-                wave = self.calculate_wave(freq)
-                curve.setData(self.x, wave)
-        else:
-            # Update single wave
-            wave = self.calculate_wave(self.frequency)
-            self.wave_curve.setData(self.x, wave)
         
-        # Update interference waves if enabled
-        if self.show_interference:
-            wave1, wave2 = self.calculate_interference_waves(self.wavelength)
-            self.interference_wave1.setData(self.x, wave1)
-            self.interference_wave2.setData(self.x, wave2)
+        # Only update UI if something has changed
+        needs_update = False
+        
+        # Store previous state to check for changes
+        if not hasattr(self, '_prev_state'):
+            self._prev_state = {
+                'time': self.time - 1,  # Force initial update
+                'white_light': self.white_light,
+                'show_interference': self.show_interference,
+                'frequency': self.frequency
+            }
+            needs_update = True
+        
+        # Check if any relevant state has changed
+        if (abs(self._prev_state['time'] - self.time) > 0.009 or
+            self._prev_state['white_light'] != self.white_light or
+            self._prev_state['show_interference'] != self.show_interference or
+            self._prev_state['frequency'] != self.frequency):
+            needs_update = True
+        
+        if needs_update:
+            # Update the wave data
+            if self.white_light:
+                # Update multiple waves with different wavelengths
+                for curve, freq in self.wave_curves:
+                    wave = self.calculate_wave(freq)
+                    curve.setData(self.x, wave)
+            else:
+                # Update single wave
+                wave = self.calculate_wave(self.frequency)
+                self.wave_curve.setData(self.x, wave)
             
-             # Ensure they're visible
-            if not self.interference_wave1.isVisible():
-                self.interference_wave1.setVisible(True)
-            if not self.interference_wave2.isVisible():
-                self.interference_wave2.setVisible(True)
-        else:
-            # Ensure they're hidden when not enabled
-            if self.interference_wave1.isVisible():
-                self.interference_wave1.setVisible(False)
-            if self.interference_wave2.isVisible():
-                self.interference_wave2.setVisible(False)
+            # Update interference waves if enabled
+            if self.show_interference:
+                wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+                self.interference_wave1.setData(self.x, wave1)
+                self.interference_wave2.setData(self.x, wave2)
+                
+                # Ensure they're visible
+                if not self.interference_wave1.isVisible():
+                    self.interference_wave1.setVisible(True)
+                if not self.interference_wave2.isVisible():
+                    self.interference_wave2.setVisible(True)
+            else:
+                # Ensure they're hidden when not enabled
+                if self.interference_wave1.isVisible():
+                    self.interference_wave1.setVisible(False)
+                if self.interference_wave2.isVisible():
+                    self.interference_wave2.setVisible(False)
+            
+            # Update previous state
+            self._prev_state = {
+                'time': self.time,
+                'white_light': self.white_light,
+                'show_interference': self.show_interference,
+                'frequency': self.frequency
+            }
 
     def toggle_pause(self, paused):
         """Toggle pause state"""
@@ -552,7 +613,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             if paused:
                 self.timer.stop()
             else:
-                self.timer.start(30)
+                self.timer.start(16)
 
 
 
@@ -601,28 +662,36 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Create medium rectangles with proper fill
             # Medium 1 (Air)
+        # Force color to be a QColor object
+            medium1_color = QColor(self.medium1_color)
             medium1_rect = pg.FillBetweenItem(
                 pg.PlotCurveItem([0, self.boundary1], [2, 2]),
                 pg.PlotCurveItem([0, self.boundary1], [-2, -2]),
-                brush=pg.mkBrush(self.medium1_color))
+                brush=pg.mkBrush(medium1_color))
             self.addItem(medium1_rect)
             self.medium_rects.append(medium1_rect)
             
             # Medium 2 (Water)
+ 
+            # Force color to be a QColor object
+            medium2_color = QColor(self.medium2_color)
             medium2_rect = pg.FillBetweenItem(
                 pg.PlotCurveItem([self.boundary1, self.boundary2], [2, 2]),
                 pg.PlotCurveItem([self.boundary1, self.boundary2], [-2, -2]),
-                brush=pg.mkBrush(self.medium2_color))
+                brush=pg.mkBrush(medium2_color))
             self.addItem(medium2_rect)
             self.medium_rects.append(medium2_rect)
             
             # Medium 3 (Glass)
+            # Force color to be a QColor object
+            medium3_color = QColor(self.medium3_color)
             medium3_rect = pg.FillBetweenItem(
                 pg.PlotCurveItem([self.boundary2, 3000], [2, 2]),
                 pg.PlotCurveItem([self.boundary2, 3000], [-2, -2]),
-                brush=pg.mkBrush(self.medium3_color))
+                brush=pg.mkBrush(medium3_color))
             self.addItem(medium3_rect)
             self.medium_rects.append(medium3_rect)
+        
 
             # Create wavelength scale bar and labels
             self.scale_bar = None
@@ -737,6 +806,16 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_wavelength_scale(self):
         """Update the wavelength scale indicators on the grid"""
         # Remove existing scale elements if they exist
+
+        scale_key = (self.frequency, self.n1, self.n2, self.n3)
+    
+        # Skip update if nothing has changed
+        if hasattr(self, '_scale_key') and self._scale_key == scale_key:
+            return
+        
+        # Store new key
+        self._scale_key = scale_key
+
         if hasattr(self, 'scale_bar') and self.scale_bar is not None:
             self.removeItem(self.scale_bar)
         if hasattr(self, 'scale_label') and self.scale_label is not None:
@@ -808,6 +887,14 @@ class WaveSimulationWidget(pg.PlotWidget):
         """Update the wavelength and colors"""
         self.frequency = value
         self.wavelength = 299792.458 / value
+
+        if hasattr(self, '_wave_cache'):
+            del self._wave_cache
+        if hasattr(self, '_interference_cache'):
+            del self._interference_cache
+        if hasattr(self, '_scale_key'):
+            del self._scale_key
+
         # Update wave color based on wavelength
         if not self.white_light:
             r, g, b = frequency_to_rgb(value)
@@ -844,6 +931,11 @@ class WaveSimulationWidget(pg.PlotWidget):
         """Update the amplitude of the wave"""
         self.amplitude = value
         
+        if hasattr(self, '_wave_cache'):
+            del self._wave_cache
+        if hasattr(self, '_interference_cache'):
+            del self._interference_cache
+
         # Store current y-range before updating
         y_range = self.getPlotItem().getViewBox().viewRange()[1]
         
@@ -857,56 +949,92 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_speed(self, value):
         self.speed = value
         
+        if hasattr(self, '_wave_cache'):
+            del self._wave_cache
+        if hasattr(self, '_interference_cache'):
+            del self._interference_cache
+
     def update_n1(self, value):
+        """Update refractive index of medium 1"""
         self.n1 = value
+        # Invalidate caches when parameters change
+        if hasattr(self, '_wave_cache'):
+            del self._wave_cache
+        if hasattr(self, '_interference_cache'):
+            del self._interference_cache
+        if hasattr(self, '_scale_key'):
+            del self._scale_key
         self.update_plot()
         
     def update_n2(self, value):
+        """Update refractive index of medium 2"""
         self.n2 = value
+        # Invalidate caches when parameters change
+        if hasattr(self, '_wave_cache'):
+            del self._wave_cache
+        if hasattr(self, '_interference_cache'):
+            del self._interference_cache
+        if hasattr(self, '_scale_key'):
+            del self._scale_key
         self.update_plot()
         
     def update_n3(self, value):
+        """Update refractive index of medium 3"""
         self.n3 = value
+        # Invalidate caches when parameters change
+        if hasattr(self, '_wave_cache'):
+            del self._wave_cache
+        if hasattr(self, '_interference_cache'):
+            del self._interference_cache
+        if hasattr(self, '_scale_key'):
+            del self._scale_key
         self.update_plot()
         
     def update_medium1(self, medium_name):
-        """Update medium 1 selection"""
         if medium_name in self.medium_presets:
             # Update the refractive index
             n1 = self.medium_presets[medium_name]['n']
             self.n1_slider.setValue(int(n1 * 100))
             
-            # Update the wave widget's n1 value
+            # Update the wave widget's n1 value and name
             self.wave_widget.update_n1(n1)
             self.wave_widget.medium1_name = medium_name
-           
+            
+            # Update the medium color
+            self.wave_widget.medium1_color = self.medium_presets[medium_name]['color']
+        
             self.wave_widget.update_plot()
             
     def update_medium2(self, medium_name):
-        """Update medium 2 selection"""
+
         if medium_name in self.medium_presets:
             # Update the refractive index
             n2 = self.medium_presets[medium_name]['n']
             self.n2_slider.setValue(int(n2 * 100))
             
-            # Update the wave widget's n2 value
+            # Update the wave widget's n2 value and name
             self.wave_widget.update_n2(n2)
             self.wave_widget.medium2_name = medium_name
-            # Update the wave widget's medium color
+            
+            # Update the medium color
+            self.wave_widget.medium2_color = self.medium_presets[medium_name]['color']
 
             self.wave_widget.update_plot()
             
     def update_medium3(self, medium_name):
-        """Update medium 3 selection"""
+   
         if medium_name in self.medium_presets:
             # Update the refractive index
             n3 = self.medium_presets[medium_name]['n']
             self.n3_slider.setValue(int(n3 * 100))
             
-            # Update the wave widget's n3 value
+            # Update the wave widget's n3 value and name
             self.wave_widget.update_n3(n3)
             self.wave_widget.medium3_name = medium_name
-            # Update the wave widget's medium color
+            
+            # Update the medium color
+            self.wave_widget.medium3_color = self.medium_presets[medium_name]['color']
+            
             self.wave_widget.update_plot()
         
     def toggle_prism_mode(self, enabled):
@@ -1273,20 +1401,20 @@ class LightSimulationApp(QMainWindow):
         self.setWindowTitle("Light Wave Simulation")
         self.setGeometry(100, 100, 1200, 800)
         
+
         # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
-            'Air': {'n': 1.0003, 'color': '#1a237e'},  # Deep indigo
-            'Water': {'n': 1.33, 'color': '#0d47a1'},  # Rich blue
-            'Glass (Crown)': {'n': 1.52, 'color': '#01579b'},  # Deep cyan
-            'Glass (Flint)': {'n': 1.62, 'color': '#006064'},  # Dark cyan
-            'Diamond': {'n': 2.42, 'color': '#004d40'},  # Dark teal
-            'Acrylic': {'n': 1.49, 'color': '#1565c0'},  # Bright blue
-            'Glycerine': {'n': 1.47, 'color': '#0277bd'},  # Light blue
-            'Ethanol': {'n': 1.36, 'color': '#0288d1'},  # Sky blue
-            'Quartz': {'n': 1.54, 'color': '#00838f'},  # Medium cyan
-            'Sapphire': {'n': 1.77, 'color': '#1a237e'}  # Deep blue
+            'Air': {'n': 1.0003, 'color': '#3A3A3A80'},  # Very dark gray with transparency
+            'Water': {'n': 1.33, 'color': '#0D47A1C0'},  # Rich blue with higher opacity
+            'Glass (Crown)': {'n': 1.52, 'color': '#4488AACC'},  # Deep cyan with higher opacity
+            'Glass (Flint)': {'n': 1.62, 'color': '#55AABBCC'},  # Dark cyan with higher opacity
+            'Diamond': {'n': 2.42, 'color': '#331a37C0'},  # Dark teal with higher opacity
+            'Acrylic': {'n': 1.49, 'color': '#1565C0C0'},  # Bright blue with higher opacity
+            'Glycerine': {'n': 1.47, 'color': '#2f2016C0'},  # Light blue with higher opacity
+            'Ethanol': {'n': 1.36, 'color': '#66CCFFCC'},  # Lighter blue with higher opacity
+            'Quartz': {'n': 1.54, 'color': '#200e0eC0'},  # Medium cyan with higher opacity
+            'Sapphire': {'n': 1.77, 'color': '#311B92C0'}  # Deep purple with higher opacity
         }
-        
         # Preset scenarios
         self.scenario_materials = {
             'Air → Water → Glass': ('Air', 'Water', 'Glass (Crown)'),
@@ -1296,11 +1424,6 @@ class LightSimulationApp(QMainWindow):
             'Glass → Air → Water': ('Glass (Crown)', 'Air', 'Water')
         }
         
-        # Create a color indicator for wavelength (we'll hide this)
-        self.wavelength_color_indicator = QFrame()
-        self.wavelength_color_indicator.setFixedSize(0, 0)  # Set to zero size to hide it
-        self.wavelength_color_indicator.setFrameShape(QFrame.NoFrame)
-        self.wavelength_color_indicator.setStyleSheet("background-color: transparent;")
         
         # Set dark mode stylesheet
         self.setStyleSheet("""
@@ -1377,9 +1500,8 @@ class LightSimulationApp(QMainWindow):
   
         self.main_layout.addWidget(button_container)
         
-        # Hide the 'A' button by setting the context menu policy
+ 
         self.wave_widget.setContextMenuPolicy(Qt.NoContextMenu)
-        
         # Share medium presets with the wave widget
         self.wave_widget.medium_presets = self.medium_presets
         
@@ -1394,7 +1516,11 @@ class LightSimulationApp(QMainWindow):
         
         # Add wave controls
         self.setup_wave_controls(controls_layout)
-    
+
+
+        self.wave_widget.medium1_color = self.medium_presets['Air']['color']
+        self.wave_widget.medium2_color = self.medium_presets['Water']['color']
+        self.wave_widget.medium3_color = self.medium_presets['Glass (Crown)']['color']
 
     def resizeEvent(self, event):
         """Handle window resize events"""
@@ -1416,17 +1542,6 @@ class LightSimulationApp(QMainWindow):
         wave_group.setLayout(wave_layout)
         layout.addWidget(wave_group)
         
-        # Wavelength controls in a vertical layout for label and slider
-        wavelength_container = QVBoxLayout()
-        
-        # Create horizontal layout for centered wavelength label
-        wavelength_label_layout = QHBoxLayout()
-        wavelength_label = QLabel("Wavelength:")
-        wavelength_label_layout.addStretch()
-        wavelength_label_layout.addWidget(wavelength_label)
-        wavelength_label_layout.addStretch()
-        wavelength_container.addLayout(wavelength_label_layout)
-
         
         
         # Wavelength slider with color gradient
@@ -1531,6 +1646,7 @@ class LightSimulationApp(QMainWindow):
             self.medium1_combo.addItem(medium)
         medium1_layout.addWidget(self.medium1_combo)
         
+
         # Medium 1 n slider
         n1_layout = QHBoxLayout()
         n1_label = QLabel("n₁:")
@@ -1544,7 +1660,7 @@ class LightSimulationApp(QMainWindow):
         n1_layout.addWidget(self.n1_slider)
         n1_layout.addWidget(self.n1_value)
         medium1_layout.addLayout(n1_layout)
-        
+
         # Middle group (medium 2)
         medium2_group = QGroupBox("Medium 2")
         medium2_layout = QVBoxLayout()
@@ -1557,6 +1673,7 @@ class LightSimulationApp(QMainWindow):
             self.medium2_combo.addItem(medium)
         medium2_layout.addWidget(self.medium2_combo)
         
+
         # Medium 2 n slider
         n2_layout = QHBoxLayout()
         n2_label = QLabel("n₂:")
@@ -1570,18 +1687,18 @@ class LightSimulationApp(QMainWindow):
         n2_layout.addWidget(self.n2_slider)
         n2_layout.addWidget(self.n2_value)
         medium2_layout.addLayout(n2_layout)
-        
+
         # Right group (medium 3)
         medium3_group = QGroupBox("Medium 3")
         medium3_layout = QVBoxLayout()
         medium3_group.setLayout(medium3_layout)
         layout.addWidget(medium3_group)
         
+
         # Medium 3 selection
         self.medium3_combo = QComboBox()
         for medium in sorted(self.medium_presets.keys()):
             self.medium3_combo.addItem(medium)
-        self.medium3_combo.setCurrentText("Glass (Crown)")
         medium3_layout.addWidget(self.medium3_combo)
         
         # Medium 3 n slider
@@ -1597,7 +1714,7 @@ class LightSimulationApp(QMainWindow):
         n3_layout.addWidget(self.n3_slider)
         n3_layout.addWidget(self.n3_value)
         medium3_layout.addLayout(n3_layout)
-        
+        self.medium3_combo.setCurrentText('Glass (Crown)')
         # Scenario presets
         scenario_group = QGroupBox("Presets")
         scenario_layout = QVBoxLayout()
@@ -1707,6 +1824,10 @@ class LightSimulationApp(QMainWindow):
             # Update the wave widget's n1 value
             self.wave_widget.update_n1(n1)
             
+            # Set the medium name and color in the wave widget
+            self.wave_widget.medium1_name = medium_name
+            self.wave_widget.medium1_color = self.medium_presets[medium_name]['color']
+            
             # Update the wave widget's medium color
             self.wave_widget.update_plot()
             
@@ -1720,6 +1841,10 @@ class LightSimulationApp(QMainWindow):
             # Update the wave widget's n2 value
             self.wave_widget.update_n2(n2)
             
+            # Set the medium name and color in the wave widget
+            self.wave_widget.medium2_name = medium_name
+            self.wave_widget.medium2_color = self.medium_presets[medium_name]['color']
+            
             # Update the wave widget's medium color
             self.wave_widget.update_plot()
             
@@ -1732,6 +1857,10 @@ class LightSimulationApp(QMainWindow):
             
             # Update the wave widget's n3 value
             self.wave_widget.update_n3(n3)
+            
+            # Set the medium name and color in the wave widget
+            self.wave_widget.medium3_name = medium_name
+            self.wave_widget.medium3_color = self.medium_presets[medium_name]['color']
             
             # Update the wave widget's medium color
             self.wave_widget.update_plot()
@@ -1752,7 +1881,11 @@ class LightSimulationApp(QMainWindow):
             self.medium1_combo.setCurrentText(medium1)
             self.medium2_combo.setCurrentText(medium2)
             self.medium3_combo.setCurrentText(medium3)
+                        
             
+            # Force a plot update
+            self.wave_widget.update_plot()
+
             # Update refractive indices
             if medium1 in self.medium_presets:
                 n1 = self.medium_presets[medium1]['n']
@@ -1793,10 +1926,6 @@ class LightSimulationApp(QMainWindow):
         enabled = state == Qt.Checked
         self.wave_widget.toggle_ray_mode(enabled)
 
-    def toggle_pause(self, checked):
-        """Toggle pause state"""
-        self.pause_button.setText("⏸" if checked else "▶")
-        self.wave_widget.toggle_pause(checked)
 
 
 # Run the application
