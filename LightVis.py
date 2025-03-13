@@ -3,9 +3,57 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QSlider, QPushButton, QComboBox, QGroupBox, QFrame,
                             QCheckBox, QTabWidget, QRadioButton, QButtonGroup)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QPainter,QFont, QColor, QPen, QBrush
 import pyqtgraph as pg
+
+class PlayPauseButton(QPushButton):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setFixedSize(80, 40)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("""
+            QPushButton {
+                border-radius: 10px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #1C97EA;
+            }
+            QPushButton:checked {
+                background-color: #007ACC;
+            }
+            QPushButton:checked:hover {
+                background-color: #1C97EA;
+            }
+            QPushButton:!checked {
+                background-color: #E74C3C;
+            }
+            QPushButton:!checked:hover {
+                background-color: #FF6B6B;
+            }
+        """)
+        self.update_icon(False)
+        
+    def update_icon(self, paused):
+        if paused:
+            # Play icon (triangle)
+            self.setToolTip("Play Animation")
+            self.setText("▶")
+        else:
+            # Pause icon (two vertical bars)
+            self.setToolTip("Pause Animation")
+            self.setText("||")
+        
+        # Set text color and font
+        self.setStyleSheet(self.styleSheet() + """
+            QPushButton {
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+            }
+        """)
 
 # Custom colored slider for wavelength selection
 class ColoredSlider(QSlider):
@@ -16,14 +64,13 @@ class ColoredSlider(QSlider):
                 border: 1px solid #5c5c5c;
                 height: 8px;
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0.000 #380082,    /* 790 THz - violet */
-                    stop:0.160 #4400ff,    /* 680 THz - deep blue */
-                    stop:0.296 #0088ff,    /* 610 THz - light blue */
-                    stop:0.350 #00ff00,    /* 580 THz - green */
-                    stop:0.539 #ffff00,    /* 540 THz - yellow */
-                    stop:0.715 #ff8800,    /* 510 THz - orange */
-                    stop:0.870 #ff0000,    /* 460 THz - red */
-                    stop:1.000 #820000);   /* 400 THz - deep red */
+                    stop:0.000 #ff0000,    /* 400 THz - red */
+                    stop:0.200 #ff8800,    /* 460 THz - orange */
+                    stop:0.350 #ffff00,    /* 510 THz - yellow */
+                    stop:0.500 #00ff00,    /* 540 THz - green */
+                    stop:0.650 #0088ff,    /* 580 THz - light blue */
+                    stop:0.800 #4400ff,    /* 680 THz - deep blue */
+                    stop:1.000 #8800ff);   /* 790 THz - violet */
                 margin: 2px 0;
                 border-radius: 5px;
             }
@@ -39,53 +86,54 @@ class ColoredSlider(QSlider):
 
 # Define frequency to RGB color mapping
 def wavelength_to_rgb(wavelength):
-    # Map simulation wavelength to approximate visible spectrum (380-750nm)
-    # Assuming wavelength 10-100 in simulation maps to 380-750nm
-    nm = wavelength
-
-    # Based on algorithm by Dan Bruton (www.physics.sfasu.edu/astro/color/spectra.html)
-    if 380 <= nm < 440:
-        r = -(nm - 440) / (440 - 380)
+    """Convert wavelength (in nm) to RGB color values"""
+    # Ensure wavelength is within visible spectrum (approximately 380-750 nm)
+    if wavelength < 380:
+        wavelength = 380  # Cap at violet
+    elif wavelength > 750:
+        wavelength = 750  # Cap at red
+    
+    # Normalize wavelength to 0-1 range within visible spectrum
+    normalized = (wavelength - 380) / (750 - 380)
+    
+    # Convert to RGB using a simplified approximation of visible spectrum
+    if 380 <= wavelength < 440:
+        # Violet to blue
+        r = ((440 - wavelength) / (440 - 380)) * 0.8
         g = 0.0
         b = 1.0
-    elif 440 <= nm < 490:
+    elif 440 <= wavelength < 490:
+        # Blue to cyan
         r = 0.0
-        g = (nm - 440) / (490 - 440)
+        g = ((wavelength - 440) / (490 - 440))
         b = 1.0
-    elif 490 <= nm < 510:
+    elif 490 <= wavelength < 510:
+        # Cyan to green
         r = 0.0
         g = 1.0
-        b = -(nm - 510) / (510 - 490)
-    elif 510 <= nm < 580:
-        r = (nm - 510) / (580 - 510)
+        b = ((510 - wavelength) / (510 - 490))
+    elif 510 <= wavelength < 580:
+        # Green to yellow
+        r = ((wavelength - 510) / (580 - 510))
         g = 1.0
         b = 0.0
-    elif 580 <= nm < 645:
+    elif 580 <= wavelength < 645:
+        # Yellow to red
         r = 1.0
-        g = -(nm - 645) / (645 - 580)
+        g = ((645 - wavelength) / (645 - 580))
         b = 0.0
-    elif 645 <= nm <= 750:
+    else:  # 645-750
+        # Red
         r = 1.0
         g = 0.0
         b = 0.0
-    else:
-        r, g, b = 0.5, 0.5, 0.5  # Outside visible spectrum
     
-    # Attenuate brightness at the edges of the visible spectrum
-    if 380 <= nm < 420:
-        factor = 0.3 + 0.7 * (nm - 380) / (420 - 380)
-    elif 420 <= nm < 700:
-        factor = 1.0
-    elif 700 <= nm <= 750:
-        factor = 0.3 + 0.7 * (750 - nm) / (750 - 700)
-    else:
-        factor = 0.0
-        
-    r = round(255 * r * factor)
-    g = round(255 * g * factor)
-    b = round(255 * b * factor)
+    # Scale RGB values to 0-255 range
+    r = int(r * 255)
+    g = int(g * 255)
+    b = int(b * 255)
     
-    return (r, g, b)
+    return r, g, b
 
 def frequency_to_rgb(frequency_THz):
     """Convert frequency in THz to RGB color"""
@@ -121,8 +169,8 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.paused = False
         self.prism_mode = False
 
-        self.prism_frequencies = [790, 700, 640, 580, 530, 500, 460, 430, 400]
-        
+        self.prism_frequencies = np.linspace(400, 790, 10)
+        self.prism_wavelengths = [299792.458 / freq for freq in self.prism_frequencies]
         # Initialize medium properties
         self.n1 = 1.0  # Air
         self.n2 = 1.33  # Water
@@ -460,8 +508,8 @@ class WaveSimulationWidget(pg.PlotWidget):
     
         if self.white_light:
             # Update multiple waves with different wavelengths
-            for wl, curve in self.wave_curves:
-                wave = self.calculate_wave(wl)
+            for curve, freq in self.wave_curves:
+                wave = self.calculate_wave(freq)
                 curve.setData(self.x, wave)
         else:
             # Update single wave
@@ -769,40 +817,52 @@ class WaveSimulationWidget(pg.PlotWidget):
         if enabled:
             # Create the curves for visible spectrum
             self.create_white_light_curves()
-            
+
+            if hasattr(self, 'wave_curve'):
+                self.wave_curve.setVisible(False)
             # Hide the original single wavelength curve when in white light mode
-            self.wave_curve.setVisible(False)
+            for curve_item in self.wave_curves:
+                if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                    curve, _ = curve_item
+                    if hasattr(curve, 'setVisible'):
+                        curve.setVisible(True)
         else:
             # Show the original single wavelength curve when not in white light mode
-            self.wave_curve.setVisible(True)
+            if hasattr(self, 'wave_curve'):
+                self.wave_curve.setVisible(True)
         
-        # Update visibility of wave curves
-        for wl, curve in self.wave_curves:
-            curve.setVisible(enabled)
+             # Hide all white light curves
+            for curve_item in self.wave_curves:
+                if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                    curve, _ = curve_item
+                    if hasattr(curve, 'setVisible'):
+                        curve.setVisible(False)
 
     def create_white_light_curves(self):
         """Create curves for multiple wavelengths to simulate white light"""
-        # Clear existing curves if any
-        if hasattr(self, 'wave_curves'):
-            for wl, curve in self.wave_curves:
+        for curve_item in self.wave_curves:
+            if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                curve, _ = curve_item
                 self.removeItem(curve)
-                
+      
         self.wave_curves = []
-        
-        # Create curves for different wavelengths in the visible spectrum
-        for wl in self.prism_wavelengths:
-            # Calculate wave for this wavelength
-            wave = self.calculate_wave(wl)
+        # Clear existing curves if any
+        for freq in self.prism_frequencies:
+            # Calculate wavelength from frequency
+            wl = 299792.458 / freq
+                
+        # Calculate wave for this frequency
+            wave = self.calculate_wave(freq)
             
             # Get color for this wavelength
             r, g, b = wavelength_to_rgb(wl)
             wave_color = QColor(r, g, b)
             
             # Create curve with this color
-            curve = self.plot(self.x, wave, pen=pg.mkPen(wave_color, width=3))
+            curve = self.plot(self.x, wave, pen=pg.mkPen(wave_color, width=4))
             
-            # Store wavelength and curve
-            self.wave_curves.append((wl, curve))
+             # Store curve and frequency
+            self.wave_curves.append((curve, freq))
 
     def update_ray_lines(self):
         """Update the ray lines to visualize refraction angles"""
@@ -1199,53 +1259,20 @@ class LightSimulationApp(QMainWindow):
         self.wave_widget = WaveSimulationWidget()
         self.main_layout.addWidget(self.wave_widget)
         
-        # Create pause button container at the bottom left
-        self.pause_container = QWidget()  # Changed to self.pause_container
-        self.pause_container.setFixedSize(60, 60)
-        self.pause_container.setAttribute(Qt.WA_TranslucentBackground)
-        pause_layout = QVBoxLayout(self.pause_container)
-        pause_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Create and style pause button
-        self.pause_button = QPushButton()
-        self.pause_button.setFixedSize(50, 50)
-        self.pause_button.setCheckable(True)
-        self.pause_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 122, 204, 180);  /* Semi-transparent blue */
-                border: none;
-                border-radius: 25px;  /* Fully rounded corners */
-                padding: 5px;
-                color: white;
-                font-family: Arial;
-                font-size: 20px;  /* Larger font */
-                font-weight: bold;
-                outline: none;
-            }
-            QPushButton:hover {
-                background-color: rgba(28, 151, 234, 200);  /* Brighter blue when hovering */
-            }
-            QPushButton:checked {
-                background-color: rgba(204, 68, 0, 180);  /* Semi-transparent orange when paused */
-            }
-            QPushButton:checked:hover {
-                background-color: rgba(234, 92, 28, 200);  /* Brighter orange when hovering */
-            }
-            QPushButton:focus {
-                outline: none;
-                border: none;
-            }
-        """)
+        # Create a modern play/pause button
+        self.play_pause_button = PlayPauseButton()
+        self.play_pause_button.clicked.connect(self.toggle_animation)
 
-        self.pause_button.setText("▶")
-        pause_layout.addWidget(self.pause_button)
+        # Add the button to a centered container at the bottom of the plot
+        button_container = QWidget()
+        button_layout = QHBoxLayout(button_container)
+        button_layout.addStretch(1)
+        button_layout.addWidget(self.play_pause_button)
+        button_layout.addStretch(1)
+        button_layout.setContentsMargins(0, 5, 0, 5)
 
-        # Position pause container at bottom left of wave widget
-        self.pause_container.setParent(self.wave_widget)
-        self.pause_container.move(20, self.wave_widget.height() - 100)
-        
-        # Connect pause button signal
-        self.pause_button.toggled.connect(self.toggle_pause)
+  
+        self.main_layout.addWidget(button_container)
         
         # Hide the 'A' button by setting the context menu policy
         self.wave_widget.setContextMenuPolicy(Qt.NoContextMenu)
@@ -1273,6 +1300,10 @@ class LightSimulationApp(QMainWindow):
         if hasattr(self, 'pause_container') and hasattr(self, 'wave_widget'):
             self.pause_container.move(20, self.wave_widget.height() - 100)
 
+    def toggle_animation(self):
+        paused = self.play_pause_button.isChecked()
+        self.wave_widget.toggle_pause(paused)
+        self.play_pause_button.update_icon(paused)
      
     def setup_wave_controls(self, layout):
         # Left controls group (wave properties)
@@ -1606,6 +1637,7 @@ class LightSimulationApp(QMainWindow):
         """Toggle white light mode"""
         enabled = state == Qt.Checked
         self.wave_widget.toggle_white_light(enabled)
+        
         
     def apply_scenario(self):
         """Apply the selected scenario preset"""
