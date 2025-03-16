@@ -1,4 +1,5 @@
 import sys
+import time
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QSlider, QPushButton, QComboBox, QGroupBox, QFrame,
@@ -211,7 +212,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.medium_labels = []
         
         # Create wave curve
-        self.x = np.linspace(0, 3000, 4000)
+        self.x = np.linspace(0, 3000, 6000)
  
         
         # Initialize all container lists first
@@ -271,10 +272,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.medium_rects.append(self.boundary1_line)
         self.medium_rects.append(self.boundary2_line)
         
-        self.medium_rects.append(self.boundary1_line)
-        self.medium_rects.append(self.boundary2_line)
-        
-
 
         # Initial parameters
         self.wavelength = 550
@@ -351,6 +348,11 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.reflection_marker2.setVisible(False)
 
  
+        # Add frame rate control
+        self.last_update_time = time.time()
+        self.frame_time = 1/60  # Target 60 FPS
+        self.skip_frames = 0
+
 
         # Set up the animation timer
         self.timer = QTimer()
@@ -364,8 +366,13 @@ class WaveSimulationWidget(pg.PlotWidget):
         if not self.show_interference:
             return np.zeros_like(self.x), np.zeros_like(self.x)
         
-        # Get the actual refracted wave
+        # Use reduced resolution for interference waves
+        # Take every 3rd point for better performance
+        reduced_x = self.x[::3]
+        
+        # Get the actual refracted wave with reduced points
         actual_wave = self.calculate_wave(self.frequency)
+        reduced_actual = actual_wave[::3]
         
         # Wave 1 (red) - original wave as if it was coming from vacuum (n=1.0)
         # Calculate vacuum wavelength
@@ -380,23 +387,34 @@ class WaveSimulationWidget(pg.PlotWidget):
         phase_vacuum = omega_vacuum * self.time
         
         # For all media, calculate the wave as if it was in vacuum (n=1.0)
-        wave1 = self.amplitude * self.visualization_scale * 1.5 * np.sin(k_vacuum * self.x - phase_vacuum)
+        # Use reduced resolution
+        reduced_wave1 = self.amplitude * self.visualization_scale * 1.5 * np.sin(k_vacuum * reduced_x - phase_vacuum)
         
         # Wave 2 (green) - the difference between actual wave and vacuum wave
         # This represents the effect of the media on the wave
-        wave2 = actual_wave - wave1
+        reduced_wave2 = reduced_actual - reduced_wave1
         
-        return wave1, wave2
+        return reduced_x, reduced_wave1, reduced_wave2
         
     def calculate_superposition_interference(self):
         """Calculate interference waves based on the superposition of all wavelengths"""
+
+        # Create cache key based on current state
+        cache_key = (self.time, self.n1, self.n2, self.n3)
+        # Check if we have this calculation cached
+        if hasattr(self, '_interference_cache') and cache_key in self._interference_cache:
+            return self._interference_cache[cache_key]
+        # Use reduced resolution for interference waves
+        reduced_x = self.x[::3]
+        
         # Start with zeros
-        superposition = np.zeros_like(self.x)
+        superposition = np.zeros_like(reduced_x)
         
         # Add all individual waves to create the superposition
         for curve, freq in self.wave_curves:
             wave = self.calculate_wave(freq)
-            superposition += wave
+            reduced_wave = wave[::3]  # Take every 3rd point
+            superposition += reduced_wave
             
         # Scale the superposition to keep it within reasonable amplitude
         if len(self.wave_curves) > 0:
@@ -404,7 +422,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # For interference visualization, we need two components:
         # 1. The original wave (red) - this should be the superposition of vacuum waves
-        vacuum_superposition = np.zeros_like(self.x)
+        vacuum_superposition = np.zeros_like(reduced_x)
         
         # Calculate a reference wave with n=1.0 for all media
         for curve, freq in self.wave_curves:
@@ -419,8 +437,8 @@ class WaveSimulationWidget(pg.PlotWidget):
             omega_vacuum = 2 * np.pi * freq * (self.speed / 50) / 100
             phase_vacuum = omega_vacuum * self.time
             
-            # Calculate vacuum wave
-            vacuum_wave = self.amplitude * self.visualization_scale * 1.5 * np.sin(k_vacuum * self.x - phase_vacuum)
+            # Calculate vacuum wave with reduced resolution
+            vacuum_wave = self.amplitude * self.visualization_scale * 1.5 * np.sin(k_vacuum * reduced_x - phase_vacuum)
             
             # Add to vacuum superposition
             vacuum_superposition += vacuum_wave
@@ -436,7 +454,18 @@ class WaveSimulationWidget(pg.PlotWidget):
         # This represents the effect of the media on the wave
         wave2 = superposition - vacuum_superposition
             
-        return wave1, wave2
+        # Cache the result
+        if not hasattr(self, '_interference_cache'):
+            self._interference_cache = {}
+        self._interference_cache[cache_key] = (reduced_x, wave1, wave2)
+        
+        # Limit cache size
+        if len(self._interference_cache) > 50:
+            oldest_keys = list(self._interference_cache.keys())[:10]
+            for key in oldest_keys:
+                self._interference_cache.pop(key)
+
+        return reduced_x, wave1, wave2
 
     def calculate_wave(self, frequency, additional_phase=0):
         """Calculate wave values for the given frequency"""
@@ -466,32 +495,29 @@ class WaveSimulationWidget(pg.PlotWidget):
         k3 = 2 * np.pi / wavelength_m3
         
         # Calculate angular frequency (radians per time unit)
-        # Reduce speed by dividing by 50 instead of 20
         omega = 2 * np.pi * frequency * (self.speed / 50) / 100
         
         # Calculate phase at each point
         phase = omega * self.time + additional_phase
         
-        # Calculate wave values for each region
+        # Pre-allocate array for better performance
         y = np.zeros_like(self.x)
         
         # Apply proper scaling to amplitude
         scaled_amplitude = self.amplitude * self.visualization_scale * 1.5 
         
-        # Medium 1 (left of first boundary)
+        # Vectorized calculation for each region
         mask1 = self.x < self.boundary1
-        y[mask1] = scaled_amplitude * np.sin(k1 * self.x[mask1] - phase)
-        
-        # Medium 2 (between boundaries)
         mask2 = (self.x >= self.boundary1) & (self.x < self.boundary2)
-        # Ensure phase continuity at boundary
-        phase_shift2 = (k1 - k2) * self.boundary1
-        y[mask2] = scaled_amplitude * np.sin(k2 * self.x[mask2] - phase + phase_shift2)
-        
-        # Medium 3 (right of second boundary)
         mask3 = self.x >= self.boundary2
-        # Ensure phase continuity at second boundary
+        
+        # Calculate phase shifts
+        phase_shift2 = (k1 - k2) * self.boundary1
         phase_shift3 = (k1 - k2) * self.boundary1 + (k2 - k3) * self.boundary2
+        
+        # Vectorized calculations (much faster than loops)
+        y[mask1] = scaled_amplitude * np.sin(k1 * self.x[mask1] - phase)
+        y[mask2] = scaled_amplitude * np.sin(k2 * self.x[mask2] - phase + phase_shift2)
         y[mask3] = scaled_amplitude * np.sin(k3 * self.x[mask3] - phase + phase_shift3)
         
         # Cache the result
@@ -499,14 +525,28 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Limit cache size to prevent memory issues
         if len(self._wave_calc_cache) > 100:
-            # Remove a random item from the cache
-            self._wave_calc_cache.pop(next(iter(self._wave_calc_cache)))
+            # Remove oldest items first (more efficient)
+            keys = list(self._wave_calc_cache.keys())
+            oldest_keys = keys[:10]
+            for key in oldest_keys:
+                self._wave_calc_cache.pop(key)
         
         return y
 
     
     def update_animation(self):
         """Update the animation for each timer tick"""
+        # Implement frame skipping for performance
+        current_time = time.time()
+        elapsed = current_time - self.last_update_time
+
+        if elapsed > 0.033 and self.skip_frames < 2:  # 33ms = ~30 FPS
+            self.skip_frames += 1
+            return
+
+        self.skip_frames = 0
+        self.last_update_time = current_time
+
         if not self.paused:  # Only update time if not paused
             self.time += 0.01
         
@@ -552,20 +592,29 @@ class WaveSimulationWidget(pg.PlotWidget):
                     # Update superposition wave
                     self.update_superposition_wave()
                 else:
-                    # Batch update for white light mode
-                    self.setUpdatesEnabled(False)  # Disable updates while making changes
+                    # Only update component waves if they're visible
+                    visible_components = False
+                    for curve_item in self.wave_curves:
+                        if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                            curve, _ = curve_item
+                            if hasattr(curve, 'setVisible') and curve.isVisible():
+                                visible_components = True
+                                break
                     
-                    # Pre-calculate all waves
-                    all_waves = []
-                    for curve, freq in self.wave_curves:
-                        wave = self.calculate_wave(freq)
-                        all_waves.append((curve, wave))
-                    
-                    # Update all curves at once
-                    for curve, wave in all_waves:
-                        curve.setData(self.x, wave)
-                    
-                    self.setUpdatesEnabled(True)  # Re-enable updates after all changes
+                    if visible_components:
+                        # Batch update for white light mode with reduced processing
+                        self.setUpdatesEnabled(False)  # Disable updates while making changes
+                        
+                        # Pre-calculate all waves with reduced data
+                        reduced_x = self.x[::20]  # Take every 20th point
+                        
+                        for curve, freq in self.wave_curves:
+                            if curve.isVisible():
+                                wave = self.calculate_wave(freq)
+                                reduced_wave = wave[::20]  # Take every 20th point
+                                curve.setData(reduced_x, reduced_wave)
+                        
+                        self.setUpdatesEnabled(True)  # Re-enable updates after all changes
             else:
                 # Update single wave
                 wave = self.calculate_wave(self.frequency)
@@ -578,17 +627,18 @@ class WaveSimulationWidget(pg.PlotWidget):
                     abs(self._prev_state['n3'] - self.n3) > 0.0001):
                     self.update_wavelength_scale()
             
-            # Update interference waves if enabled
+            # Update interference waves if enabled - use reduced resolution
             if self.show_interference and needs_update:
-                if self.white_light and self.superposition_enabled:
-                    # Use superposition-based interference
-                    wave1, wave2 = self.calculate_superposition_interference()
+                if self.white_light:
+                    # Always use superposition-based interference for white light mode
+                    reduced_x, wave1, wave2 = self.calculate_superposition_interference()
                 else:
-                    # Use normal interference
-                    wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+                    # Use normal interference with reduced resolution for single wave mode
+                    reduced_x, wave1, wave2 = self.calculate_interference_waves(self.wavelength)
                 
-                self.interference_wave1.setData(self.x, wave1)
-                self.interference_wave2.setData(self.x, wave2)
+                # Update with reduced data
+                self.interference_wave1.setData(reduced_x, wave1)
+                self.interference_wave2.setData(reduced_x, wave2)
             
             # Update previous state
             self._prev_state = {
@@ -628,24 +678,23 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Force a significant time update to ensure waves are animated
             old_time = self.time
-            self.time += 0.5  # Add a time offset
+            self.time += 0.1  # Add a time offset
             
             # Force recalculation with the new time
-            if self.white_light and self.superposition_enabled:
-                # Calculate interference based on superposition wave
-                wave1, wave2 = self.calculate_superposition_interference()
+            if self.white_light:
+                # Always use superposition-based interference for white light
+                reduced_x, wave1, wave2 = self.calculate_superposition_interference()
             else:
-                # Calculate normal interference
-                wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+                # Calculate normal interference with reduced resolution for single wave
+                reduced_x, wave1, wave2 = self.calculate_interference_waves(self.wavelength)
             
-            # Update the interference waves
-            self.interference_wave1.setData(self.x, wave1)
-            self.interference_wave2.setData(self.x, wave2)
+            # Update the interference waves with reduced data
+            self.interference_wave1.setData(reduced_x, wave1)
+            self.interference_wave2.setData(reduced_x, wave2)
             
             # Reset time to original plus a small increment to keep animation flowing
-            self.time = old_time + 0.1
-        else:
-            # Hide interference waves when disabled
+            self.time = old_time + 0.01
+        else: 
             self.interference_wave1.setVisible(False)
             self.interference_wave2.setVisible(False)
 
@@ -666,15 +715,27 @@ class WaveSimulationWidget(pg.PlotWidget):
             if self.superposition_wave:
                 self.superposition_wave.setVisible(not enabled)
             
-            # Show/hide individual waves based on superposition setting
-            for curve_item in self.wave_curves:
-                if isinstance(curve_item, tuple) and len(curve_item) == 2:
-                    curve, _ = curve_item
-                    if hasattr(curve, 'setVisible'):
-                        curve.setVisible(enabled)
-            
-            # Update the superposition wave if it's visible
-            if not enabled:
+            # If showing components, recreate them with reduced data
+            if enabled:
+                # Recreate with reduced data for better performance
+                self.create_white_light_curves()
+                
+                # Now show the components
+                for curve_item in self.wave_curves:
+                    if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                        curve, _ = curve_item
+                        if hasattr(curve, 'setVisible'):
+                            curve.setVisible(True)
+                self._update_component_visibility(enabled)            
+            else:
+                # Hide all component waves
+                for curve_item in self.wave_curves:
+                    if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                        curve, _ = curve_item
+                        if hasattr(curve, 'setVisible'):
+                            curve.setVisible(False)
+                
+                # Update the superposition wave
                 self.update_superposition_wave()
         else:
             # In normal mode, keep original behavior
@@ -693,10 +754,12 @@ class WaveSimulationWidget(pg.PlotWidget):
             if enabled:
                 self.update_superposition_wave()
 
-
     def update_plot(self):
         """Update the plot with current parameters"""
         try:
+            # Defer updates until all changes are made
+            self.setUpdatesEnabled(False)
+            
             # Store current y range to restore after updates
             y_range = self.getViewBox().viewRange()[1]
             
@@ -723,19 +786,16 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.wave_curve.setData(self.x, wave)
             else:
                 # Batch update white light curves
-                self.setUpdatesEnabled(False)
-                
                 # Pre-calculate all waves
                 all_waves = []
                 for curve, freq in self.wave_curves:
-                    wave = self.calculate_wave(freq)
-                    all_waves.append((curve, wave))
+                    if curve.isVisible():  # Only update visible curves
+                        wave = self.calculate_wave(freq)
+                        all_waves.append((curve, wave))
                 
                 # Update all curves at once
                 for curve, wave in all_waves:
                     curve.setData(self.x, wave)
-                
-                self.setUpdatesEnabled(True)
             
             # Update ray lines if ray mode is enabled
             if self.show_ray_mode:
@@ -744,8 +804,12 @@ class WaveSimulationWidget(pg.PlotWidget):
             # Restore y range to prevent auto-scaling
             self.setYRange(y_range[0], y_range[1], padding=0)
             
+            # Re-enable updates
+            self.setUpdatesEnabled(True)
+            
         except Exception as e:
             print(f"Error in update_plot: {str(e)}")
+            self.setUpdatesEnabled(True)  # Make sure updates are re-enabled
             return
             
     def _create_initial_plot_elements(self):
@@ -1018,52 +1082,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         if self.show_ray_mode:
             self.update_ray_lines()
         
-    def update_medium1(self, medium_name):
-        if medium_name in self.medium_presets:
-            # Update the refractive index
-            n1 = self.medium_presets[medium_name]['n']
-            self.n1_slider.setValue(int(n1 * 100))
-            
-            # Update the wave widget's n1 value and name
-            self.wave_widget.update_n1(n1)
-            self.wave_widget.medium1_name = medium_name
-            
-            # Update the medium color
-            self.wave_widget.medium1_color = self.medium_presets[medium_name]['color']
-        
-            self.wave_widget.update_plot()
-            
-    def update_medium2(self, medium_name):
-
-        if medium_name in self.medium_presets:
-            # Update the refractive index
-            n2 = self.medium_presets[medium_name]['n']
-            self.n2_slider.setValue(int(n2 * 100))
-            
-            # Update the wave widget's n2 value and name
-            self.wave_widget.update_n2(n2)
-            self.wave_widget.medium2_name = medium_name
-            
-            # Update the medium color
-            self.wave_widget.medium2_color = self.medium_presets[medium_name]['color']
-
-            self.wave_widget.update_plot()
-            
-    def update_medium3(self, medium_name):
-   
-        if medium_name in self.medium_presets:
-            # Update the refractive index
-            n3 = self.medium_presets[medium_name]['n']
-            self.n3_slider.setValue(int(n3 * 100))
-            
-            # Update the wave widget's n3 value and name
-            self.wave_widget.update_n3(n3)
-            self.wave_widget.medium3_name = medium_name
-            
-            # Update the medium color
-            self.wave_widget.medium3_color = self.medium_presets[medium_name]['color']
-            
-            self.wave_widget.update_plot()
         
     def toggle_prism_mode(self, enabled):
         """Toggle between normal and prism simulation mode"""
@@ -1126,36 +1144,56 @@ class WaveSimulationWidget(pg.PlotWidget):
 
 
     def create_white_light_curves(self):
-        """Create curves for multiple wavelengths to simulate white light"""
-        self.setUpdatesEnabled(False)
-
+        """Create curves for visible spectrum wavelengths"""
+        # Clear any existing curves
         for curve_item in self.wave_curves:
             if isinstance(curve_item, tuple) and len(curve_item) == 2:
                 curve, _ = curve_item
-                self.removeItem(curve)
-      
+                if hasattr(curve, 'setVisible'):
+                    self.removeItem(curve)  # Remove the curve from the plot
+        
         self.wave_curves = []
         
-        # Pre-calculate common values for all waves
-        angle_incidence = np.radians(self.angle_of_incidence)
-
-        #Pre-calculate all waves
-        all_waves = []
-        for freq in self.prism_frequencies:
-            # Calculate wavelength from frequency
-            wl = 299792.458 / freq
-            # Calculate wave for this frequency
-            wave = self.calculate_wave(freq)
-            all_waves.append((freq, wl, wave))
+        # Disable updates while creating curves to improve performance
+        self.setUpdatesEnabled(False)
         
-        # Create all curves at once
-        for freq, wl, wave in all_waves:
+        # Define frequency range for visible spectrum (THz)
+        min_freq = 400  # ~750 nm (red)
+        max_freq = 790  # ~380 nm (violet)
+        
+        # Adaptive resolution based on system performance
+        # Check if we're running smoothly
+        if hasattr(self, 'skip_frames') and self.skip_frames > 0:
+            # Lower resolution if we're skipping frames
+            num_frequencies = 5
+            sample_rate = 30  # Take every 30th point
+        else:
+            # Higher resolution if performance is good
+            num_frequencies = 7
+            sample_rate = 20  # Take every 20th point
+        
+        # Use key colors across the spectrum
+        frequencies = np.linspace(min_freq, max_freq, num_frequencies)
+        
+        # Use reduced number of points for white light component waves
+        reduced_x = self.x[::sample_rate]
+        
+        for freq in frequencies:
+            # Convert frequency to wavelength
+            wavelength_nm = 299792.458 / freq
+            
+            # Calculate wave with reduced points
+            wave = self.calculate_wave(freq)
+            reduced_wave = wave[::sample_rate]
+            
             # Get color for this wavelength
-            r, g, b = wavelength_to_rgb(wl)
+            r, g, b = wavelength_to_rgb(wavelength_nm)
             wave_color = QColor(r, g, b)
             
-            # Create curve with this color
-            curve = self.plot(self.x, wave, pen=pg.mkPen(wave_color, width=4))
+            # Create curve with this color and reduced points
+            # Use thicker lines to make them more visible despite fewer points
+            curve = self.plot(reduced_x, reduced_wave, pen=pg.mkPen(wave_color, width=5))
+            curve.setVisible(False)  # Initially hidden
             
             # Store curve and frequency
             self.wave_curves.append((curve, freq))
@@ -1168,17 +1206,35 @@ class WaveSimulationWidget(pg.PlotWidget):
         if not self.superposition_enabled or not self.white_light or self.superposition_wave is None:
             return
             
-        # Start with zeros
-        superposition = np.zeros_like(self.x)
+        # Create cache key based on current state
+        cache_key = (self.time, self.n1, self.n2, self.n3)
         
-        # Add all individual waves
-        for curve, freq in self.wave_curves:
-            wave = self.calculate_wave(freq)
-            superposition += wave
+        # Check if we have this calculation cached
+        if hasattr(self, '_superposition_cache') and cache_key in self._superposition_cache:
+            superposition = self._superposition_cache[cache_key]
+        else:
+            # Start with zeros
+            superposition = np.zeros_like(self.x)
             
-        # Scale the superposition to keep it within reasonable amplitude
-        if len(self.wave_curves) > 0:
-            superposition = superposition / len(self.wave_curves)
+            # Add all individual waves
+            for curve, freq in self.wave_curves:
+                wave = self.calculate_wave(freq)
+                superposition += wave
+                
+            # Scale the superposition to keep it within reasonable amplitude
+            if len(self.wave_curves) > 0:
+                superposition = superposition / len(self.wave_curves)
+            
+            # Cache the result
+            if not hasattr(self, '_superposition_cache'):
+                self._superposition_cache = {}
+            self._superposition_cache[cache_key] = superposition
+            
+            # Limit cache size
+            if len(self._superposition_cache) > 50:
+                oldest_keys = list(self._superposition_cache.keys())[:10]
+                for key in oldest_keys:
+                    self._superposition_cache.pop(key)
             
         # Update the superposition wave
         self.superposition_wave.setData(self.x, superposition)
@@ -1186,6 +1242,35 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_ray_lines(self):
         """Update the ray lines to visualize refraction angles"""
         try:
+            # Create cache key based on current state
+            cache_key = (self.angle_of_incidence, self.n1, self.n2, self.n3, self.ray_target_y)
+            
+            # Check if we have this calculation cached
+            if hasattr(self, '_ray_cache') and cache_key in self._ray_cache:
+                ray_data = self._ray_cache[cache_key]
+                
+                # Apply cached data
+                self.ray_incident.setData(ray_data['incident_x'], ray_data['incident_y'])
+                self.ray_refracted1.setData(ray_data['refracted1_x'], ray_data['refracted1_y'])
+                self.ray_refracted2.setData(ray_data['refracted2_x'], ray_data['refracted2_y'])
+                self.ray_incident.setVisible(True)
+                self.ray_refracted1.setVisible(ray_data['refracted1_visible'])
+                self.ray_refracted2.setVisible(ray_data['refracted2_visible'])
+                self.reflection_marker1.setVisible(ray_data['reflection1_visible'])
+                self.reflection_marker2.setVisible(ray_data['reflection2_visible'])
+                if ray_data['reflection1_visible']:
+                    self.reflection_marker1.setData([ray_data['reflection1_x']], [ray_data['reflection1_y']])
+                if ray_data['reflection2_visible']:
+                    self.reflection_marker2.setData([ray_data['reflection2_x']], [ray_data['reflection2_y']])
+                
+                # Update angle labels
+                self.angle1_label.setHtml(ray_data['angle1_html'])
+                self.angle2_label.setHtml(ray_data['angle2_html'])
+                self.angle3_label.setHtml(ray_data['angle3_html'])
+                
+                return
+        
+
             angle_refraction1_deg = 0
             angle_refraction2_deg = 0
 
@@ -1375,6 +1460,39 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.angle1_label.setHtml(f"{label_html_style}θ₁: {self.angle_of_incidence}°</div>")
                 self.angle2_label.setHtml(f"{label_html_style}θ₂: {angle_refraction1_deg:.1f}°</div>")
                 self.angle3_label.setHtml(f"{label_html_style}θ₃: {angle_refraction2_deg:.1f}°</div>")
+
+                if not hasattr(self, '_ray_cache'):
+                    self._ray_cache = {}
+
+                # Store all the calculated data
+                ray_data = {
+                    'incident_x': [start_x, self.boundary1],
+                    'incident_y': [start_y, boundary1_y],
+                    'refracted1_x': [self.boundary1, refracted1_end_x],
+                    'refracted1_y': [boundary1_y, refracted1_end_y],
+                    'refracted2_x': [self.boundary2, refracted2_end_x],
+                    'refracted2_y': [refracted1_end_y, refracted2_end_y],
+                    'refracted1_visible': self.ray_refracted1.isVisible(),
+                    'refracted2_visible': self.ray_refracted2.isVisible(),
+                    'reflection1_visible': self.reflection_marker1.isVisible(),
+                    'reflection2_visible': self.reflection_marker2.isVisible(),
+                    'reflection1_x': self.boundary1,
+                    'reflection1_y': boundary1_y,
+                    'reflection2_x': self.boundary2,
+                    'reflection2_y': refracted1_end_y,
+                    'angle1_html': self.angle1_label.toHtml(),
+                    'angle2_html': self.angle2_label.toHtml(),
+                    'angle3_html': self.angle3_label.toHtml()
+                }
+                
+                self._ray_cache[cache_key] = ray_data
+                
+                # Limit cache size
+                if len(self._ray_cache) > 100:
+                    oldest_keys = list(self._ray_cache.keys())[:20]
+                    for key in oldest_keys:
+                        self._ray_cache.pop(key)
+
             except Exception as e:
                 # If arcsin calculation fails, it should be TIR - handle accordingly
                 print(f"Exception in calculating refraction angle: {e}")
@@ -1419,36 +1537,45 @@ class WaveSimulationWidget(pg.PlotWidget):
         """Update the angle of incidence"""
         self.angle_of_incidence = value
         
-        # Update angle labels even when ray mode is not enabled
-        label_html_style = """<div style="font-family: Arial; font-size: 16pt; font-weight: bold; color: white;">"""
-        self.angle1_label.setHtml(f"{label_html_style}θ₁: {self.angle_of_incidence}°</div>")
-        
-        # Calculate refraction angles using Snell's law
-        try:
-            # First boundary: n1*sin(θ1) = n2*sin(θ2)
-            sin_theta2 = self.n1 * np.sin(np.radians(self.angle_of_incidence)) / self.n2
+        # Use cached ray calculations if available
+        cache_key = (self.angle_of_incidence, self.n1, self.n2, self.n3, self.ray_target_y)
+        if hasattr(self, '_ray_cache') and cache_key in self._ray_cache:
+            ray_data = self._ray_cache[cache_key]
+            self.angle1_label.setHtml(ray_data['angle1_html'])
+            self.angle2_label.setHtml(ray_data['angle2_html'])
+            self.angle3_label.setHtml(ray_data['angle3_html'])
+        else:
+
+            # Update angle labels even when ray mode is not enabled
+            label_html_style = """<div style="font-family: Arial; font-size: 16pt; font-weight: bold; color: white;">"""
+            self.angle1_label.setHtml(f"{label_html_style}θ₁: {self.angle_of_incidence}°</div>")
             
-            if abs(sin_theta2) <= 1.0:  # Check for total internal reflection
-                angle_refraction1_deg = np.degrees(np.arcsin(sin_theta2))
-                self.angle2_label.setHtml(f"{label_html_style}θ₂: {angle_refraction1_deg:.1f}°</div>")
+            # Calculate refraction angles using Snell's law
+            try:
+                # First boundary: n1*sin(θ1) = n2*sin(θ2)
+                sin_theta2 = self.n1 * np.sin(np.radians(self.angle_of_incidence)) / self.n2
                 
-                # Second boundary: n2*sin(θ2) = n3*sin(θ3)
-                sin_theta3 = self.n2 * np.sin(np.radians(angle_refraction1_deg)) / self.n3
-                
-                if abs(sin_theta3) <= 1.0:  # Check for total internal reflection
-                    angle_refraction2_deg = np.degrees(np.arcsin(sin_theta3))
-                    self.angle3_label.setHtml(f"{label_html_style}θ₃: {angle_refraction2_deg:.1f}°</div>")
+                if abs(sin_theta2) <= 1.0:  # Check for total internal reflection
+                    angle_refraction1_deg = np.degrees(np.arcsin(sin_theta2))
+                    self.angle2_label.setHtml(f"{label_html_style}θ₂: {angle_refraction1_deg:.1f}°</div>")
+                    
+                    # Second boundary: n2*sin(θ2) = n3*sin(θ3)
+                    sin_theta3 = self.n2 * np.sin(np.radians(angle_refraction1_deg)) / self.n3
+                    
+                    if abs(sin_theta3) <= 1.0:  # Check for total internal reflection
+                        angle_refraction2_deg = np.degrees(np.arcsin(sin_theta3))
+                        self.angle3_label.setHtml(f"{label_html_style}θ₃: {angle_refraction2_deg:.1f}°</div>")
+                    else:
+                        self.angle3_label.setHtml(f"{label_html_style}θ₃: TIR</div>")
                 else:
-                    self.angle3_label.setHtml(f"{label_html_style}θ₃: TIR</div>")
-            else:
-                self.angle2_label.setHtml(f"{label_html_style}θ₂: TIR</div>")
-                self.angle3_label.setHtml(f"{label_html_style}θ₃: N/A</div>")
-        except Exception as e:
-            print(f"Error updating angle labels: {e}")
-        
-        # Update ray lines if ray mode is enabled
-        if self.show_ray_mode:
-            self.update_ray_lines()
+                    self.angle2_label.setHtml(f"{label_html_style}θ₂: TIR</div>")
+                    self.angle3_label.setHtml(f"{label_html_style}θ₃: N/A</div>")
+            except Exception as e:
+                print(f"Error updating angle labels: {e}")
+            
+            # Update ray lines if ray mode is enabled
+            if self.show_ray_mode:
+                self.update_ray_lines()
 
     def set_ray_target_y(self, y_value):
         """Set the Y-coordinate where the ray hits the first boundary"""
@@ -1464,6 +1591,45 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Clear all cached data
         if hasattr(self, '_wave_calc_cache'):
             self._wave_calc_cache = {}
+        if hasattr(self, '_superposition_cache'):
+            self._superposition_cache = {}
+        if hasattr(self, '_interference_cache'):
+            self._interference_cache = {}
+        if hasattr(self, '_ray_cache'):
+            self._ray_cache = {}
+
+class ModernCheckBox(QCheckBox):
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet("""
+            QCheckBox {
+                spacing: 8px;
+                font-size: 14px;
+            }
+            
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+                border-radius: 10px;
+                border: 2px solid #555555;
+                background-color: #333337;
+            }
+            
+            QCheckBox::indicator:unchecked:hover {
+                border: 2px solid #007ACC;
+            }
+            
+            QCheckBox::indicator:checked {
+                background-color: #007ACC;
+                border: 2px solid #007ACC;
+                image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNCIgaGVpZ2h0PSIxNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cG9seWxpbmUgcG9pbnRzPSIyMCA2IDkgMTcgNCAxMiI+PC9wb2x5bGluZT48L3N2Zz4=);
+            }
+            
+            QCheckBox::indicator:checked:hover {
+                background-color: #1C97EA;
+                border: 2px solid #1C97EA;
+            }
+        """)
 
 class ColoredSlider(QSlider):
     def __init__(self, parent=None):
@@ -1752,13 +1918,12 @@ class LightSimulationApp(QMainWindow):
         ray_target_layout.addWidget(self.ray_target_value)
         wave_layout.addLayout(ray_target_layout)
 
-        # Add interference mode checkbox next to other mode controls
         mode_layout = QHBoxLayout()
-        self.white_light_check = QCheckBox("White Light")
-        self.interference_check = QCheckBox("Show Interference")
+        self.white_light_check = ModernCheckBox("White Light")
+        self.interference_check = ModernCheckBox("Show Interference")
         self.interference_check.setChecked(False)
-        self.ray_mode_check = QCheckBox("Show Ray Path")
-        self.superposition_check = QCheckBox("Show Components")
+        self.ray_mode_check = ModernCheckBox("Show Ray Path")
+        self.superposition_check = ModernCheckBox("Show Components")
         self.superposition_check.setToolTip("Toggle between showing individual color components or a single superposition wave")
 
 
