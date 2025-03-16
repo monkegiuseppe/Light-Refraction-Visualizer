@@ -2,7 +2,7 @@ import sys
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QSlider, QPushButton, QComboBox, QGroupBox, QFrame,
-                            QCheckBox, QTabWidget, QRadioButton, QButtonGroup)
+                            QCheckBox, QTabWidget, QRadioButton, QButtonGroup, QSizePolicy)
 from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QPainter,QFont, QColor, QPen, QBrush
 import pyqtgraph as pg
@@ -151,9 +151,9 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.time = 0.0
         self.visualization_scale = 0.1
         # Initialize colors for mediums
-        self.medium1_color = '#3A3A3A80'  
-        self.medium2_color = '#0D47A1C0'  
-        self.medium3_color = '#4488AACC'  
+        self.medium1_color = '#22222259'  
+        self.medium2_color = '#1E90FF59'  
+        self.medium3_color = '#88DDFF80'  
         
         self.medium1_name = 'Air'
         self.medium2_name = 'Water'
@@ -171,6 +171,8 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.white_light = False
         self.paused = False
         self.prism_mode = False
+        self.superposition_enabled = False
+        self.superposition_wave = None
 
         self.prism_frequencies = np.linspace(400, 790, 10)
         self.prism_wavelengths = [299792.458 / freq for freq in self.prism_frequencies]
@@ -209,7 +211,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.medium_labels = []
         
         # Create wave curve
-        self.x = np.linspace(0, 3000, 6000)
+        self.x = np.linspace(0, 3000, 4000)
  
         
         # Initialize all container lists first
@@ -265,35 +267,15 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.addItem(self.boundary1_line)
         self.addItem(self.boundary2_line)
         
-        # Create and add the medium rectangles with proper fill
-        # Medium 1 (Air)
-        medium1_rect = pg.FillBetweenItem(
-            pg.PlotCurveItem([0, self.boundary1], [2, 2]),
-            pg.PlotCurveItem([0, self.boundary1], [-2, -2]),
-            brush=pg.mkBrush(self.medium1_color))
-        self.addItem(medium1_rect)
-        self.medium_rects.append(medium1_rect)
-
-        
-        # Medium 2 (Water)
-        medium2_rect = pg.FillBetweenItem(
-            pg.PlotCurveItem([self.boundary1, self.boundary2], [2, 2]),
-            pg.PlotCurveItem([self.boundary1, self.boundary2], [-2, -2]),
-            brush=pg.mkBrush(self.medium2_color))
-        self.addItem(medium2_rect)
-        self.medium_rects.append(medium2_rect)
-        
-        # Medium 3 (Glass)
-        medium3_rect = pg.FillBetweenItem(
-            pg.PlotCurveItem([self.boundary2, 3000], [2, 2]),
-            pg.PlotCurveItem([self.boundary2, 3000], [-2, -2]),
-            brush=pg.mkBrush(self.medium3_color))
-        self.addItem(medium3_rect)
-        self.medium_rects.append(medium3_rect)
+        self.medium_rects = []  # Initialize as empty list
+        self.medium_rects.append(self.boundary1_line)
+        self.medium_rects.append(self.boundary2_line)
         
         self.medium_rects.append(self.boundary1_line)
         self.medium_rects.append(self.boundary2_line)
         
+
+
         # Initial parameters
         self.wavelength = 550
         self.amplitude = 5
@@ -368,181 +350,161 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.reflection_marker1.setVisible(False)
         self.reflection_marker2.setVisible(False)
 
+ 
 
         # Set up the animation timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_animation)
-        self.timer.start(16)  # 50ms interval (20 fps)
+        self.timer.start(16)  # 16ms interval (60 fps)
+
+        self.update_wavelength_scale()
         
     def calculate_interference_waves(self, wavelength):
         """Calculate the component waves that create interference"""
         if not self.show_interference:
             return np.zeros_like(self.x), np.zeros_like(self.x)
-            
-        cache_key = (
-            wavelength,
-            self.time,
-            self.frequency,
-            self.n1,
-            self.n2,
-            self.n3,
-            self.amplitude,
-            self.speed
-        )
-
-        if hasattr(self, '_interference_cache') and self._interference_cache.get('key') == cache_key:
-            return self._interference_cache.get('wave1'), self._interference_cache.get('wave2')
-
-
+        
         # Get the actual refracted wave
         actual_wave = self.calculate_wave(self.frequency)
         
         # Wave 1 (red) - original wave as if it was coming from vacuum (n=1.0)
-        wave1 = np.zeros_like(self.x)
-        
         # Calculate vacuum wavelength
-        vacuum_wavelength = wavelength
+        vacuum_wavelength = 299792.458 / self.frequency
+        
         # Calculate wave number for vacuum (n=1.0)
-        k_vacuum = (2 * np.pi * 1.0) / vacuum_wavelength
+        k_vacuum = 2 * np.pi / vacuum_wavelength
         
         # Calculate phase with time component to ensure animation
-        phase_vacuum = k_vacuum * self.x - self.speed * self.time
+        # Use the same speed scaling as in calculate_wave
+        omega_vacuum = 2 * np.pi * self.frequency * (self.speed / 50) / 100
+        phase_vacuum = omega_vacuum * self.time
         
         # For all media, calculate the wave as if it was in vacuum (n=1.0)
-        # This represents the original wave without any medium effects
-        wave1 = self.amplitude * self.visualization_scale * np.sin(phase_vacuum)
+        wave1 = self.amplitude * self.visualization_scale * 1.5 * np.sin(k_vacuum * self.x - phase_vacuum)
         
         # Wave 2 (green) - the difference between actual wave and vacuum wave
         # This represents the effect of the media on the wave
         wave2 = actual_wave - wave1
         
-        if not hasattr(self, '_interference_cache'):
-            self._interference_cache = {}
-        self._interference_cache['key'] = cache_key
-        self._interference_cache['wave1'] = wave1
-        self._interference_cache['wave2'] = wave2
-
         return wave1, wave2
         
-    def calculate_wave(self, frequency):
-        """Calculate the wave based on current parameters for a specific wavelength"""
-
-        cache_key = (
-            frequency, 
-            self.time,
-            self.n1, 
-            self.n2, 
-            self.n3, 
-            self.angle_of_incidence,
-            self.boundary1, 
-            self.boundary2,
-            self.prism_mode
-        )
-
-        if hasattr(self, '_wave_cache') and self._wave_cache.get('key') == cache_key:
-            return self._wave_cache.get('wave')
-
-        wave = np.zeros_like(self.x)
-        wavelength = 299792.458 / frequency
+    def calculate_superposition_interference(self):
+        """Calculate interference waves based on the superposition of all wavelengths"""
+        # Start with zeros
+        superposition = np.zeros_like(self.x)
         
-        if self.prism_mode:
-            wl_nm = wavelength
+        # Add all individual waves to create the superposition
+        for curve, freq in self.wave_curves:
+            wave = self.calculate_wave(freq)
+            superposition += wave
             
-            # Apply Cauchy's equation for dispersion: n(λ) = A + B/λ² + C/λ⁴
-            # Using simplified coefficients for glass-like materials
-            n2_wl = self.n2 + 0.0006 * (550 / wl_nm) ** 2
-            n3_wl = self.n3 + 0.0008 * (550 / wl_nm) ** 2
-        else:
-            # No dispersion in normal mode
-            n2_wl = self.n2
-            n3_wl = self.n3
+        # Scale the superposition to keep it within reasonable amplitude
+        if len(self.wave_curves) > 0:
+            superposition = superposition / len(self.wave_curves)
         
-        # Angle of incidence in radians
-        angle_incidence = np.radians(self.angle_of_incidence)
+        # For interference visualization, we need two components:
+        # 1. The original wave (red) - this should be the superposition of vacuum waves
+        vacuum_superposition = np.zeros_like(self.x)
         
-        # Add safety checks for total internal reflection
-        sin_refraction1 = np.sin(angle_incidence) * self.n1 / n2_wl
-        if abs(sin_refraction1) > 1:
-            # Total internal reflection at first boundary
-            angle_refraction1 = np.pi/2  # Set to 90 degrees
-            angle_refraction2 = np.pi/2  # Set to 90 degrees
-            total_reflection = True
-        else:
-            angle_refraction1 = np.arcsin(sin_refraction1)
-            sin_refraction2 = np.sin(angle_refraction1) * n2_wl / n3_wl
-            if abs(sin_refraction2) > 1:
-                # Total internal reflection at second boundary
-                angle_refraction2 = np.pi/2  # Set to 90 degrees
-                total_reflection = True
-            else:
-                angle_refraction2 = np.arcsin(sin_refraction2)
-                total_reflection = False
-                
-        # Update angle labels if they exist
-        if hasattr(self, 'angle1_label') and hasattr(self, 'angle2_label') and hasattr(self, 'angle3_label'):
-            label_html_style = """<div style="font-family: Arial; font-size: 16pt; font-weight: bold; color: white;">"""
-            self.angle1_label.setHtml(f"{label_html_style}θ₁: {self.angle_of_incidence}°</div>")
-            self.angle2_label.setHtml(f"{label_html_style}θ₂: {np.degrees(angle_refraction1):.1f}°</div>")
-            self.angle3_label.setHtml(f"{label_html_style}θ₃: {np.degrees(angle_refraction2):.1f}°</div>")
-
+        # Calculate a reference wave with n=1.0 for all media
+        for curve, freq in self.wave_curves:
+            # Calculate vacuum wavelength
+            vacuum_wavelength = 299792.458 / freq
             
-        # Wave parameters for each medium
-        k1 = (2 * np.pi * self.n1) / wavelength  # Wave number in medium 1
-        k2 = (2 * np.pi * n2_wl) / wavelength    # Wave number in medium 2
-        k3 = (2 * np.pi * n3_wl) / wavelength    # Wave number in medium 3
+            # Calculate wave number for vacuum
+            k_vacuum = 2 * np.pi / vacuum_wavelength
+            
+            # Calculate phase with time component
+            # Use the same speed scaling as in calculate_wave
+            omega_vacuum = 2 * np.pi * freq * (self.speed / 50) / 100
+            phase_vacuum = omega_vacuum * self.time
+            
+            # Calculate vacuum wave
+            vacuum_wave = self.amplitude * self.visualization_scale * 1.5 * np.sin(k_vacuum * self.x - phase_vacuum)
+            
+            # Add to vacuum superposition
+            vacuum_superposition += vacuum_wave
         
-        # Create y-coordinates for vertical displacement
+        # Scale the vacuum superposition
+        if len(self.wave_curves) > 0:
+            vacuum_superposition = vacuum_superposition / len(self.wave_curves)
+        
+        # Wave 1 (red) - the vacuum superposition
+        wave1 = vacuum_superposition
+        
+        # Wave 2 (green) - the difference between actual and vacuum superposition
+        # This represents the effect of the media on the wave
+        wave2 = superposition - vacuum_superposition
+            
+        return wave1, wave2
+
+    def calculate_wave(self, frequency, additional_phase=0):
+        """Calculate wave values for the given frequency"""
+        # Convert frequency to wavelength in nm
+        wavelength_nm = 299792.458 / frequency
+        
+        # Use cache key that includes additional_phase
+        cache_key = (frequency, self.time, self.n1, self.n2, self.n3, 
+                     self.amplitude, self.angle_of_incidence, additional_phase)
+        
+        # Check if we have this calculation cached
+        if hasattr(self, '_wave_calc_cache') and cache_key in self._wave_calc_cache:
+            return self._wave_calc_cache[cache_key]
+        
+        # Initialize cache if it doesn't exist
+        if not hasattr(self, '_wave_calc_cache'):
+            self._wave_calc_cache = {}
+        
+        # Calculate wavelengths in each medium (nm)
+        wavelength_m1 = wavelength_nm / self.n1
+        wavelength_m2 = wavelength_nm / self.n2
+        wavelength_m3 = wavelength_nm / self.n3
+        
+        # Calculate wave numbers (radians per nm)
+        k1 = 2 * np.pi / wavelength_m1
+        k2 = 2 * np.pi / wavelength_m2
+        k3 = 2 * np.pi / wavelength_m3
+        
+        # Calculate angular frequency (radians per time unit)
+        # Reduce speed by dividing by 50 instead of 20
+        omega = 2 * np.pi * frequency * (self.speed / 50) / 100
+        
+        # Calculate phase at each point
+        phase = omega * self.time + additional_phase
+        
+        # Calculate wave values for each region
         y = np.zeros_like(self.x)
+        
+        # Apply proper scaling to amplitude
+        scaled_amplitude = self.amplitude * self.visualization_scale * 1.5 
+        
+        # Medium 1 (left of first boundary)
+        mask1 = self.x < self.boundary1
+        y[mask1] = scaled_amplitude * np.sin(k1 * self.x[mask1] - phase)
+        
+        # Medium 2 (between boundaries)
+        mask2 = (self.x >= self.boundary1) & (self.x < self.boundary2)
+        # Ensure phase continuity at boundary
+        phase_shift2 = (k1 - k2) * self.boundary1
+        y[mask2] = scaled_amplitude * np.sin(k2 * self.x[mask2] - phase + phase_shift2)
+        
+        # Medium 3 (right of second boundary)
+        mask3 = self.x >= self.boundary2
+        # Ensure phase continuity at second boundary
+        phase_shift3 = (k1 - k2) * self.boundary1 + (k2 - k3) * self.boundary2
+        y[mask3] = scaled_amplitude * np.sin(k3 * self.x[mask3] - phase + phase_shift3)
+        
+        # Cache the result
+        self._wave_calc_cache[cache_key] = y
+        
+        # Limit cache size to prevent memory issues
+        if len(self._wave_calc_cache) > 100:
+            # Remove a random item from the cache
+            self._wave_calc_cache.pop(next(iter(self._wave_calc_cache)))
+        
+        return y
 
-        omega = self.speed  # Angular frequency
-        
-        # Calculate wave in medium 1 with angular propagation
-        mask1 = self.x <= self.boundary1
-        x1 = self.x[mask1]
-        phase1 = k1 * x1 - self.speed * self.time
-        wave[mask1] = self.amplitude * self.visualization_scale * np.sin(phase1)
-        
-        # Calculate wave in medium 2 with angular propagation
-        mask2 = (self.x > self.boundary1) & (self.x <= self.boundary2)
-        x2 = self.x[mask2] - self.boundary1
-        
-        # Handle differently based on whether we have total internal reflection
-        if 'total_reflection' in locals() and total_reflection and sin_refraction1 > 1:
-            # For total internal reflection at first boundary, create reflected wave
-            phase2 = k1 * x2 + k1 * self.boundary1 - self.speed * self.time
-        else:
-            # Normal refraction
-            phase2 = k2 * x2 + k1 * self.boundary1 - self.speed * self.time
-                  
-        wave[mask2] = self.amplitude * self.visualization_scale * np.sin(phase2)
-        
-        # Calculate wave in medium 3 with angular propagation
-        mask3 = self.x > self.boundary2
-        x3 = self.x[mask3] - self.boundary2
-        
-        
-        # Handle differently based on whether we have total internal reflection
-        if 'total_reflection' in locals() and total_reflection:
-            if sin_refraction1 > 1:
-                # Total reflection at first boundary means no wave in medium 3
-                wave[mask3] = 0
-            elif sin_refraction2 > 1:
-                # Total reflection at second boundary
-                phase3 = k2 * x3 + k2 * (self.boundary2 - self.boundary1) + k1 * self.boundary1 - self.speed * self.time
-                wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
-        else:
-            # Normal refraction to medium 3
-            phase3 = k3 * x3 + k2 * (self.boundary2 - self.boundary1) + k1 * self.boundary1 - self.speed * self.time
-            wave[mask3] = self.amplitude * self.visualization_scale * np.sin(phase3)
-        
-        if not hasattr(self, '_wave_cache'):
-            self._wave_cache = {}
-        self._wave_cache['key'] = cache_key
-        self._wave_cache['wave'] = wave
-
-        return wave
-        
-
+    
     def update_animation(self):
         """Update the animation for each timer tick"""
         if not self.paused:  # Only update time if not paused
@@ -557,7 +519,11 @@ class WaveSimulationWidget(pg.PlotWidget):
                 'time': self.time - 1,  # Force initial update
                 'white_light': self.white_light,
                 'show_interference': self.show_interference,
-                'frequency': self.frequency
+                'frequency': self.frequency,
+                'n1': self.n1,
+                'n2': self.n2,
+                'n3': self.n3,
+                'superposition_enabled': self.superposition_enabled
             }
             needs_update = True
         
@@ -565,45 +531,75 @@ class WaveSimulationWidget(pg.PlotWidget):
         if (abs(self._prev_state['time'] - self.time) > 0.009 or
             self._prev_state['white_light'] != self.white_light or
             self._prev_state['show_interference'] != self.show_interference or
-            self._prev_state['frequency'] != self.frequency):
+            self._prev_state['frequency'] != self.frequency or
+            self._prev_state['superposition_enabled'] != self.superposition_enabled or
+            abs(self._prev_state['n1'] - self.n1) > 0.0001 or
+            abs(self._prev_state['n2'] - self.n2) > 0.0001 or
+            abs(self._prev_state['n3'] - self.n3) > 0.0001):
             needs_update = True
         
         if needs_update:
-            # Update the wave data
+            # For white light mode, optimize updates
             if self.white_light:
-                # Update multiple waves with different wavelengths
-                for curve, freq in self.wave_curves:
-                    wave = self.calculate_wave(freq)
-                    curve.setData(self.x, wave)
+                # Only update wavelength scale once, using the main frequency
+                if (self._prev_state['frequency'] != self.frequency or
+                    abs(self._prev_state['n1'] - self.n1) > 0.0001 or
+                    abs(self._prev_state['n2'] - self.n2) > 0.0001 or
+                    abs(self._prev_state['n3'] - self.n3) > 0.0001):
+                    self.update_wavelength_scale()
+                
+                if self.superposition_enabled:
+                    # Update superposition wave
+                    self.update_superposition_wave()
+                else:
+                    # Batch update for white light mode
+                    self.setUpdatesEnabled(False)  # Disable updates while making changes
+                    
+                    # Pre-calculate all waves
+                    all_waves = []
+                    for curve, freq in self.wave_curves:
+                        wave = self.calculate_wave(freq)
+                        all_waves.append((curve, wave))
+                    
+                    # Update all curves at once
+                    for curve, wave in all_waves:
+                        curve.setData(self.x, wave)
+                    
+                    self.setUpdatesEnabled(True)  # Re-enable updates after all changes
             else:
                 # Update single wave
                 wave = self.calculate_wave(self.frequency)
                 self.wave_curve.setData(self.x, wave)
+                
+                # Update wavelength scale for single wave mode
+                if (self._prev_state['frequency'] != self.frequency or
+                    abs(self._prev_state['n1'] - self.n1) > 0.0001 or
+                    abs(self._prev_state['n2'] - self.n2) > 0.0001 or
+                    abs(self._prev_state['n3'] - self.n3) > 0.0001):
+                    self.update_wavelength_scale()
             
             # Update interference waves if enabled
-            if self.show_interference:
-                wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+            if self.show_interference and needs_update:
+                if self.white_light and self.superposition_enabled:
+                    # Use superposition-based interference
+                    wave1, wave2 = self.calculate_superposition_interference()
+                else:
+                    # Use normal interference
+                    wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+                
                 self.interference_wave1.setData(self.x, wave1)
                 self.interference_wave2.setData(self.x, wave2)
-                
-                # Ensure they're visible
-                if not self.interference_wave1.isVisible():
-                    self.interference_wave1.setVisible(True)
-                if not self.interference_wave2.isVisible():
-                    self.interference_wave2.setVisible(True)
-            else:
-                # Ensure they're hidden when not enabled
-                if self.interference_wave1.isVisible():
-                    self.interference_wave1.setVisible(False)
-                if self.interference_wave2.isVisible():
-                    self.interference_wave2.setVisible(False)
             
             # Update previous state
             self._prev_state = {
                 'time': self.time,
                 'white_light': self.white_light,
                 'show_interference': self.show_interference,
-                'frequency': self.frequency
+                'frequency': self.frequency,
+                'n1': self.n1,
+                'n2': self.n2,
+                'n3': self.n3,
+                'superposition_enabled': self.superposition_enabled
             }
 
     def toggle_pause(self, paused):
@@ -621,21 +617,30 @@ class WaveSimulationWidget(pg.PlotWidget):
         """Toggle visibility of interference waves"""
         self.show_interference = enabled
 
+        # Set visibility based on enabled state
         self.interference_wave1.setVisible(enabled)
         self.interference_wave2.setVisible(enabled)
         
         if enabled:
+            # Update pen colors to make them more visible
+            self.interference_wave1.setPen(pg.mkPen('r', width=2, style=Qt.DashLine))
+            self.interference_wave2.setPen(pg.mkPen('g', width=2, style=Qt.DashLine))
+            
             # Force a significant time update to ensure waves are animated
             old_time = self.time
-            self.time += 2.5  # Add a significant time offset
+            self.time += 0.5  # Add a time offset
             
             # Force recalculation with the new time
-            wave1, wave2 = self.calculate_interference_waves(self.wavelength)
+            if self.white_light and self.superposition_enabled:
+                # Calculate interference based on superposition wave
+                wave1, wave2 = self.calculate_superposition_interference()
+            else:
+                # Calculate normal interference
+                wave1, wave2 = self.calculate_interference_waves(self.wavelength)
             
             # Update the interference waves
             self.interference_wave1.setData(self.x, wave1)
             self.interference_wave2.setData(self.x, wave2)
-            
             
             # Reset time to original plus a small increment to keep animation flowing
             self.time = old_time + 0.1
@@ -644,115 +649,67 @@ class WaveSimulationWidget(pg.PlotWidget):
             self.interference_wave1.setVisible(False)
             self.interference_wave2.setVisible(False)
 
+    def toggle_superposition(self, enabled):
+        """Toggle between showing individual waves or a single superposition wave"""
+        if self.white_light:
+            # In white light mode, invert the behavior
+            # enabled=True means "Show Components"
+            # enabled=False means "Show Superposition" (default)
+            self.superposition_enabled = not enabled
+            
+            # Create superposition wave if it doesn't exist
+            if self.superposition_wave is None:
+                self.superposition_wave = self.plot(self.x, np.zeros_like(self.x), 
+                                                   pen=pg.mkPen('w', width=4))
+            
+            # Show/hide appropriate waves
+            if self.superposition_wave:
+                self.superposition_wave.setVisible(not enabled)
+            
+            # Show/hide individual waves based on superposition setting
+            for curve_item in self.wave_curves:
+                if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                    curve, _ = curve_item
+                    if hasattr(curve, 'setVisible'):
+                        curve.setVisible(enabled)
+            
+            # Update the superposition wave if it's visible
+            if not enabled:
+                self.update_superposition_wave()
+        else:
+            # In normal mode, keep original behavior
+            self.superposition_enabled = enabled
+            
+            # Create superposition wave if it doesn't exist and enabled
+            if enabled and self.superposition_wave is None:
+                self.superposition_wave = self.plot(self.x, np.zeros_like(self.x), 
+                                                   pen=pg.mkPen('w', width=4))
+            
+            # Show/hide superposition wave
+            if self.superposition_wave:
+                self.superposition_wave.setVisible(enabled)
+            
+            # Update the superposition wave if enabled
+            if enabled:
+                self.update_superposition_wave()
+
+
     def update_plot(self):
         """Update the plot with current parameters"""
         try:
             # Store current y range to restore after updates
             y_range = self.getViewBox().viewRange()[1]
             
-            # Clear existing medium rectangles and labels
-            for rect in self.medium_rects:
-                self.removeItem(rect)
-            self.medium_rects = []
+            # Initialize medium rectangles and labels if they don't exist
+            if not hasattr(self, '_plot_initialized'):
+                self._create_initial_plot_elements()
+                self._plot_initialized = True
             
-            for label_pair in self.medium_labels:
-                for label in label_pair[0:2]:
-                    self.removeItem(label)
-            self.medium_labels = []
+            # Update medium rectangles instead of recreating them
+            self._update_medium_rectangles()
             
-            # Create medium rectangles with proper fill
-            # Medium 1 (Air)
-        # Force color to be a QColor object
-            medium1_color = QColor(self.medium1_color)
-            medium1_rect = pg.FillBetweenItem(
-                pg.PlotCurveItem([0, self.boundary1], [2, 2]),
-                pg.PlotCurveItem([0, self.boundary1], [-2, -2]),
-                brush=pg.mkBrush(medium1_color))
-            self.addItem(medium1_rect)
-            self.medium_rects.append(medium1_rect)
-            
-            # Medium 2 (Water)
- 
-            # Force color to be a QColor object
-            medium2_color = QColor(self.medium2_color)
-            medium2_rect = pg.FillBetweenItem(
-                pg.PlotCurveItem([self.boundary1, self.boundary2], [2, 2]),
-                pg.PlotCurveItem([self.boundary1, self.boundary2], [-2, -2]),
-                brush=pg.mkBrush(medium2_color))
-            self.addItem(medium2_rect)
-            self.medium_rects.append(medium2_rect)
-            
-            # Medium 3 (Glass)
-            # Force color to be a QColor object
-            medium3_color = QColor(self.medium3_color)
-            medium3_rect = pg.FillBetweenItem(
-                pg.PlotCurveItem([self.boundary2, 3000], [2, 2]),
-                pg.PlotCurveItem([self.boundary2, 3000], [-2, -2]),
-                brush=pg.mkBrush(medium3_color))
-            self.addItem(medium3_rect)
-            self.medium_rects.append(medium3_rect)
-        
-
-            # Create wavelength scale bar and labels
-            self.scale_bar = None
-            self.scale_label = None
-            self.scale_title = None
-            
-            # Create initial scale bar (will be updated with wavelength changes)
-            self.update_wavelength_scale()
-            
-            self.medium_rects.append(self.boundary1_line)
-            self.medium_rects.append(self.boundary2_line)
-            
-            # Add boundary lines
-            boundary1_line = pg.InfiniteLine(pos=self.boundary1, angle=90, pen=pg.mkPen('w', width=2, style=Qt.DashLine))
-            boundary2_line = pg.InfiniteLine(pos=self.boundary2, angle=90, pen=pg.mkPen('w', width=2, style=Qt.DashLine))
-            self.addItem(boundary1_line)
-            self.addItem(boundary2_line)
-            self.medium_rects.append(boundary1_line)
-            self.medium_rects.append(boundary2_line)
-            
-             # Bring grid lines to front by removing and re-adding them
-            for line in self.grid_lines_x + self.grid_lines_y:
-                self.removeItem(line)
-                self.addItem(line)
-
-            grid_pen = pg.mkPen(color=(255, 255, 255, 80), width=0.5, style=Qt.DotLine)
-            self.showGrid(x=True, y=True, alpha=0.5)
             # Update medium labels
-            # Medium 1
-            medium1_color_label = pg.TextItem(f"n₁: {self.n1:.4f}", anchor=(0.5, 0), color='white')
-            medium1_color_label.setPos(self.boundary1 / 2, -1.2)
-            self.addItem(medium1_color_label)
-            
-            medium1_name_label = pg.TextItem(f"{self.medium1_name}", anchor=(0.5, 1), color='white')
-            medium1_name_label.setPos(self.boundary1 / 2, 1.8)
-            self.addItem(medium1_name_label)
-            
-            self.medium_labels.append((medium1_color_label, medium1_name_label, 1))
-            
-            # Medium 2
-            medium2_color_label = pg.TextItem(f"n₂: {self.n2:.4f}", anchor=(0.5, 0), color='white')
-            medium2_color_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, -1.2)
-            self.addItem(medium2_color_label)
-            
-            medium2_name_label = pg.TextItem(f"{self.medium2_name}", anchor=(0.5, 1), color='white')
-            medium2_name_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, 1.8)
-            self.addItem(medium2_name_label)
-            
-            self.medium_labels.append((medium2_color_label, medium2_name_label, 2))
-            
-            
-            # Medium 3
-            medium3_color_label = pg.TextItem(f"n₃: {self.n3:.4f}", anchor=(0.5, 0), color='white')
-            medium3_color_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, -1.2)
-            self.addItem(medium3_color_label)
-            
-            medium3_name_label = pg.TextItem(f"{self.medium3_name}", anchor=(0.5, 1), color='white')
-            medium3_name_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, 1.8)
-            self.addItem(medium3_name_label)
-            
-            self.medium_labels.append((medium3_color_label, medium3_name_label, 3))
+            self._update_medium_labels()
             
             # Update the wave curve with current parameters
             if not self.white_light:
@@ -762,18 +719,23 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.wave_curve.setPen(pg.mkPen(wave_color, width=4))
                 
                 # Update wave data
-                if hasattr(self, 'wave_curve'):
-                    self.wave_curve.setPen(pg.mkPen(wave_color, width=4))
-                    wave = self.calculate_wave(self.frequency)
-                    self.wave_curve.setData(self.x, wave)
+                wave = self.calculate_wave(self.frequency)
+                self.wave_curve.setData(self.x, wave)
             else:
-                # Update white light curves
-                if hasattr(self, 'wave_curves'):
-                    for curve, wl in self.wave_curves:
-                        r, g, b = wavelength_to_rgb(wl)
-                        curve.setPen(pg.mkPen(QColor(r, g, b), width=2))
-                        wave = self.calculate_wave(wl)
-                        curve.setData(self.x, wave)
+                # Batch update white light curves
+                self.setUpdatesEnabled(False)
+                
+                # Pre-calculate all waves
+                all_waves = []
+                for curve, freq in self.wave_curves:
+                    wave = self.calculate_wave(freq)
+                    all_waves.append((curve, wave))
+                
+                # Update all curves at once
+                for curve, wave in all_waves:
+                    curve.setData(self.x, wave)
+                
+                self.setUpdatesEnabled(True)
             
             # Update ray lines if ray mode is enabled
             if self.show_ray_mode:
@@ -784,9 +746,88 @@ class WaveSimulationWidget(pg.PlotWidget):
             
         except Exception as e:
             print(f"Error in update_plot: {str(e)}")
-            import traceback
-            traceback.print_exc()
             return
+            
+    def _create_initial_plot_elements(self):
+        """Create initial plot elements that will be reused"""
+        # Create medium rectangles
+        self.medium1_rect = pg.FillBetweenItem(
+            pg.PlotCurveItem([0, self.boundary1], [2, 2]),
+            pg.PlotCurveItem([0, self.boundary1], [-2, -2]),
+            brush=pg.mkBrush(self.medium1_color))
+        self.addItem(self.medium1_rect)
+        
+        self.medium2_rect = pg.FillBetweenItem(
+            pg.PlotCurveItem([self.boundary1, self.boundary2], [2, 2]),
+            pg.PlotCurveItem([self.boundary1, self.boundary2], [-2, -2]),
+            brush=pg.mkBrush(self.medium2_color))
+        self.addItem(self.medium2_rect)
+        
+        self.medium3_rect = pg.FillBetweenItem(
+            pg.PlotCurveItem([self.boundary2, 3000], [2, 2]),
+            pg.PlotCurveItem([self.boundary2, 3000], [-2, -2]),
+            brush=pg.mkBrush(self.medium3_color))
+        self.addItem(self.medium3_rect)
+        
+        # Create medium labels
+        self.medium1_color_label = pg.TextItem("", anchor=(0.5, 0), color='white')
+        self.medium1_name_label = pg.TextItem("", anchor=(0.5, 1), color='white')
+        self.addItem(self.medium1_color_label)
+        self.addItem(self.medium1_name_label)
+        
+        self.medium2_color_label = pg.TextItem("", anchor=(0.5, 0), color='white')
+        self.medium2_name_label = pg.TextItem("", anchor=(0.5, 1), color='white')
+        self.addItem(self.medium2_color_label)
+        self.addItem(self.medium2_name_label)
+        
+        self.medium3_color_label = pg.TextItem("", anchor=(0.5, 0), color='white')
+        self.medium3_name_label = pg.TextItem("", anchor=(0.5, 1), color='white')
+        self.addItem(self.medium3_color_label)
+        self.addItem(self.medium3_name_label)
+        
+    def _update_medium_rectangles(self):
+        """Update medium rectangles without recreating them"""
+        # Update medium 1
+        self.medium1_rect.setCurves(
+            pg.PlotCurveItem([0, self.boundary1], [2, 2]),
+            pg.PlotCurveItem([0, self.boundary1], [-2, -2]))
+        self.medium1_rect.setBrush(pg.mkBrush(self.medium1_color))
+        
+        # Update medium 2
+        self.medium2_rect.setCurves(
+            pg.PlotCurveItem([self.boundary1, self.boundary2], [2, 2]),
+            pg.PlotCurveItem([self.boundary1, self.boundary2], [-2, -2]))
+        self.medium2_rect.setBrush(pg.mkBrush(self.medium2_color))
+        
+        # Update medium 3
+        self.medium3_rect.setCurves(
+            pg.PlotCurveItem([self.boundary2, 3000], [2, 2]),
+            pg.PlotCurveItem([self.boundary2, 3000], [-2, -2]))
+        self.medium3_rect.setBrush(pg.mkBrush(self.medium3_color))
+        
+        # Update boundary lines
+        self.boundary1_line.setValue(self.boundary1)
+        self.boundary2_line.setValue(self.boundary2)
+        
+    def _update_medium_labels(self):
+        """Update medium labels without recreating them"""
+        # Update medium 1 labels
+        self.medium1_color_label.setText(f"n₁: {self.n1:.4f}")
+        self.medium1_color_label.setPos(self.boundary1 / 2, -1.2)
+        self.medium1_name_label.setText(f"{self.medium1_name}")
+        self.medium1_name_label.setPos(self.boundary1 / 2, 1.8)
+        
+        # Update medium 2 labels
+        self.medium2_color_label.setText(f"n₂: {self.n2:.4f}")
+        self.medium2_color_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, -1.2)
+        self.medium2_name_label.setText(f"{self.medium2_name}")
+        self.medium2_name_label.setPos(self.boundary1 + (self.boundary2 - self.boundary1) / 2, 1.8)
+        
+        # Update medium 3 labels
+        self.medium3_color_label.setText(f"n₃: {self.n3:.4f}")
+        self.medium3_color_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, -1.2)
+        self.medium3_name_label.setText(f"{self.medium3_name}")
+        self.medium3_name_label.setPos(self.boundary2 + (3000 - self.boundary2) / 2, 1.8)
 
     def toggle_ray_mode(self, enabled):
         """Toggle ray visualization mode"""
@@ -805,10 +846,8 @@ class WaveSimulationWidget(pg.PlotWidget):
 
     def update_wavelength_scale(self):
         """Update the wavelength scale indicators on the grid"""
-        # Remove existing scale elements if they exist
-
         scale_key = (self.frequency, self.n1, self.n2, self.n3)
-    
+        
         # Skip update if nothing has changed
         if hasattr(self, '_scale_key') and self._scale_key == scale_key:
             return
@@ -816,84 +855,60 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Store new key
         self._scale_key = scale_key
 
-        if hasattr(self, 'scale_bar') and self.scale_bar is not None:
-            self.removeItem(self.scale_bar)
-        if hasattr(self, 'scale_label') and self.scale_label is not None:
-            self.removeItem(self.scale_label)
-        if hasattr(self, 'scale_title') and self.scale_title is not None:
-            self.removeItem(self.scale_title)
-            
-        # Remove existing grid value labels if they exist
-        if hasattr(self, 'grid_value_labels'):
-            for label in self.grid_value_labels:
-                self.removeItem(label)
-        
-        # Initialize grid value labels list
-        self.grid_value_labels = []
-
+        # Calculate values
         vacuum_wavelength_nm = 299792.458 / self.frequency
         wavelength_m1 = vacuum_wavelength_nm / self.n1
         wavelength_m2 = vacuum_wavelength_nm / self.n2
         wavelength_m3 = vacuum_wavelength_nm / self.n3
-
-        c = 299792458  
-        speed_m1 = c / self.n1  
-        speed_m2 = c / self.n2  
-        speed_m3 = c / self.n3
-
+        
         speed_m1_formatted = f"{1/self.n1:.2f}c"
         speed_m2_formatted = f"{1/self.n2:.2f}c"
         speed_m3_formatted = f"{1/self.n3:.2f}c"
-
-        scale_factor = 500 / 500
-        # Add wavelength values to vertical grid lines
-        for x in np.arange(0, 3001, 500):
-            # Calculate corresponding wavelength value
-            physical_nm = x / scale_factor  # Scale to make one grid unit = wavelength/500
+        
+        # Initialize or update labels
+        if not hasattr(self, 'grid_value_labels') or len(self.grid_value_labels) == 0:
+            # First time creation
+            self.grid_value_labels = []
             
-            # Create label with wavelength value
-            label = pg.TextItem(f"{int(physical_nm)} nm", anchor=(0, 0.5), color='white')
-            label.setPos(x+10, -1.9)  # Position below the plot
-            self.addItem(label)
-            self.grid_value_labels.append(label)
-
-        # Add vacuum wavelength reference
-        wavelength_info = pg.TextItem(f"λ₀ = {int(vacuum_wavelength_nm)} nm", 
-                                     anchor=(0, 0), color='yellow')
-        wavelength_info.setPos(50, 1.5)  # Position at top-left
-        self.addItem(wavelength_info)
-        self.grid_value_labels.append(wavelength_info)
+            # Create grid line labels
+            for x in np.arange(0, 3001, 500):
+                physical_nm = x / (500/500)
+                label = pg.TextItem(f"{int(physical_nm)} nm", anchor=(0, 0.5), color='white')
+                label.setPos(x+10, -1.9)
+                self.addItem(label)
+                self.grid_value_labels.append(label)
+                
+            # Create wavelength info labels
+            wavelength_info = pg.TextItem("", anchor=(0, 0), color='yellow')
+            wavelength_info.setPos(50, 1.5)
+            self.addItem(wavelength_info)
+            self.grid_value_labels.append(wavelength_info)
+            
+            # Create medium labels
+            for i, pos in enumerate([
+                self.boundary1/2,
+                self.boundary1 + (self.boundary2-self.boundary1)/2,
+                self.boundary2 + (3000-self.boundary2)/2
+            ]):
+                label = pg.TextItem("", anchor=(0.5, 0), color='yellow')
+                label.setPos(pos, 1.5)
+                self.addItem(label)
+                self.grid_value_labels.append(label)
         
-         # Add medium-specific wavelength and speed labels
-        m1_label = pg.TextItem(f"λ₁ = {int(wavelength_m1)} nm | v₁ = {speed_m1_formatted}", 
-                              anchor=(0.5, 0), color='yellow')
-        m1_label.setPos(self.boundary1/2, 1.5)
-        self.addItem(m1_label)
-        self.grid_value_labels.append(m1_label)
+        # Update text content of existing labels
+        wavelength_idx = len(self.grid_value_labels) - 4  # Index of wavelength info label
+        self.grid_value_labels[wavelength_idx].setText(f"λ₀ = {int(vacuum_wavelength_nm)} nm")
         
-        m2_label = pg.TextItem(f"λ₂ = {int(wavelength_m2)} nm | v₂ = {speed_m2_formatted}", 
-                              anchor=(0.5, 0), color='yellow')
-        m2_label.setPos(self.boundary1 + (self.boundary2-self.boundary1)/2, 1.5)
-        self.addItem(m2_label)
-        self.grid_value_labels.append(m2_label)
-        
-        m3_label = pg.TextItem(f"λ₃ = {int(wavelength_m3)} nm | v₃ = {speed_m3_formatted}", 
-                              anchor=(0.5, 0), color='yellow')
-        m3_label.setPos(self.boundary2 + (3000-self.boundary2)/2, 1.5)
-        self.addItem(m3_label)
-        self.grid_value_labels.append(m3_label)
+        # Update medium labels
+        self.grid_value_labels[wavelength_idx+1].setText(f"λ₁ = {int(wavelength_m1)} nm | v₁ = {speed_m1_formatted}")
+        self.grid_value_labels[wavelength_idx+2].setText(f"λ₂ = {int(wavelength_m2)} nm | v₂ = {speed_m2_formatted}")
+        self.grid_value_labels[wavelength_idx+3].setText(f"λ₃ = {int(wavelength_m3)} nm | v₃ = {speed_m3_formatted}")
 
     def update_wavelength(self, value):
         """Update the wavelength and colors"""
         self.frequency = value
         self.wavelength = 299792.458 / value
 
-        if hasattr(self, '_wave_cache'):
-            del self._wave_cache
-        if hasattr(self, '_interference_cache'):
-            del self._interference_cache
-        if hasattr(self, '_scale_key'):
-            del self._scale_key
 
         # Update wave color based on wavelength
         if not self.white_light:
@@ -931,10 +946,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         """Update the amplitude of the wave"""
         self.amplitude = value
         
-        if hasattr(self, '_wave_cache'):
-            del self._wave_cache
-        if hasattr(self, '_interference_cache'):
-            del self._interference_cache
+
 
         # Store current y-range before updating
         y_range = self.getPlotItem().getViewBox().viewRange()[1]
@@ -949,46 +961,62 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_speed(self, value):
         self.speed = value
         
-        if hasattr(self, '_wave_cache'):
-            del self._wave_cache
-        if hasattr(self, '_interference_cache'):
-            del self._interference_cache
+
 
     def update_n1(self, value):
         """Update refractive index of medium 1"""
         self.n1 = value
-        # Invalidate caches when parameters change
-        if hasattr(self, '_wave_cache'):
-            del self._wave_cache
-        if hasattr(self, '_interference_cache'):
-            del self._interference_cache
-        if hasattr(self, '_scale_key'):
-            del self._scale_key
-        self.update_plot()
+        
+        # Only update the medium label text, not the entire plot
+        for label_pair in self.medium_labels:
+            if label_pair[2] == 1:  
+                label_pair[0].setText(f"n₁: {self.n1:.4f}")
+                break
+    
+
+        # Just update the wave data
+        if not self.white_light:
+            wave = self.calculate_wave(self.frequency)
+            self.wave_curve.setData(self.x, wave)
+        
+        # Update ray visualization if enabled
+        if self.show_ray_mode:
+            self.update_ray_lines()
         
     def update_n2(self, value):
         """Update refractive index of medium 2"""
         self.n2 = value
-        # Invalidate caches when parameters change
-        if hasattr(self, '_wave_cache'):
-            del self._wave_cache
-        if hasattr(self, '_interference_cache'):
-            del self._interference_cache
-        if hasattr(self, '_scale_key'):
-            del self._scale_key
-        self.update_plot()
+        for label_pair in self.medium_labels:
+            if label_pair[2] == 2:  # Medium 2
+                label_pair[0].setText(f"n₂: {self.n2:.4f}")
+                break
         
+            # Just update the wave data
+        if not self.white_light:
+            wave = self.calculate_wave(self.frequency)
+            self.wave_curve.setData(self.x, wave)
+        
+        # Update ray visualization if enabled
+        if self.show_ray_mode:
+            self.update_ray_lines()            
+
     def update_n3(self, value):
         """Update refractive index of medium 3"""
         self.n3 = value
-        # Invalidate caches when parameters change
-        if hasattr(self, '_wave_cache'):
-            del self._wave_cache
-        if hasattr(self, '_interference_cache'):
-            del self._interference_cache
-        if hasattr(self, '_scale_key'):
-            del self._scale_key
-        self.update_plot()
+# Only update the medium label text, not the entire plot
+        for label_pair in self.medium_labels:
+            if label_pair[2] == 3:  # Medium 3
+                label_pair[0].setText(f"n₃: {self.n3:.4f}")
+                break
+        
+        # Just update the wave data
+        if not self.white_light:
+            wave = self.calculate_wave(self.frequency)
+            self.wave_curve.setData(self.x, wave)
+        
+        # Update ray visualization if enabled
+        if self.show_ray_mode:
+            self.update_ray_lines()
         
     def update_medium1(self, medium_name):
         if medium_name in self.medium_presets:
@@ -1049,42 +1077,79 @@ class WaveSimulationWidget(pg.PlotWidget):
             # Create the curves for visible spectrum
             self.create_white_light_curves()
 
+            # Hide the single wave curve
             if hasattr(self, 'wave_curve'):
                 self.wave_curve.setVisible(False)
-            # Hide the original single wavelength curve when in white light mode
-            for curve_item in self.wave_curves:
-                if isinstance(curve_item, tuple) and len(curve_item) == 2:
-                    curve, _ = curve_item
-                    if hasattr(curve, 'setVisible'):
-                        curve.setVisible(True)
-        else:
-            # Show the original single wavelength curve when not in white light mode
-            if hasattr(self, 'wave_curve'):
-                self.wave_curve.setVisible(True)
-        
-             # Hide all white light curves
+                
+            # Enable superposition by default in white light mode
+            self.superposition_enabled = True
+            
+            # Create superposition wave if it doesn't exist
+            if self.superposition_wave is None:
+                self.superposition_wave = self.plot(self.x, np.zeros_like(self.x), 
+                                                   pen=pg.mkPen('w', width=4))
+            
+            # Show superposition wave, hide individual components
+            self.superposition_wave.setVisible(True)
             for curve_item in self.wave_curves:
                 if isinstance(curve_item, tuple) and len(curve_item) == 2:
                     curve, _ = curve_item
                     if hasattr(curve, 'setVisible'):
                         curve.setVisible(False)
+                        
+            # Update the superposition wave
+            self.update_superposition_wave()
+            
+            # Update the superposition button text if it exists
+            if hasattr(self, 'wave_widget') and hasattr(self.wave_widget, 'superposition_button'):
+                self.wave_widget.superposition_button.setText("Show Components")
+                self.wave_widget.superposition_button.setChecked(False)
+        else:
+            # Show the single wave curve
+            if hasattr(self, 'wave_curve'):
+                self.wave_curve.setVisible(True)
+                
+            # Hide all white light curves
+            for curve_item in self.wave_curves:
+                if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                    curve, _ = curve_item
+                    if hasattr(curve, 'setVisible'):
+                        curve.setVisible(False)
+            
+            # Hide superposition wave
+            if self.superposition_wave:
+                self.superposition_wave.setVisible(False)
+                
+            # Reset the superposition button text if it exists
+            if hasattr(self, 'wave_widget') and hasattr(self.wave_widget, 'superposition_button'):
+                self.wave_widget.superposition_button.setText("Superposition")
+
 
     def create_white_light_curves(self):
         """Create curves for multiple wavelengths to simulate white light"""
+        self.setUpdatesEnabled(False)
+
         for curve_item in self.wave_curves:
             if isinstance(curve_item, tuple) and len(curve_item) == 2:
                 curve, _ = curve_item
                 self.removeItem(curve)
       
         self.wave_curves = []
-        # Clear existing curves if any
+        
+        # Pre-calculate common values for all waves
+        angle_incidence = np.radians(self.angle_of_incidence)
+
+        #Pre-calculate all waves
+        all_waves = []
         for freq in self.prism_frequencies:
             # Calculate wavelength from frequency
             wl = 299792.458 / freq
-                
-        # Calculate wave for this frequency
+            # Calculate wave for this frequency
             wave = self.calculate_wave(freq)
-            
+            all_waves.append((freq, wl, wave))
+        
+        # Create all curves at once
+        for freq, wl, wave in all_waves:
             # Get color for this wavelength
             r, g, b = wavelength_to_rgb(wl)
             wave_color = QColor(r, g, b)
@@ -1092,8 +1157,31 @@ class WaveSimulationWidget(pg.PlotWidget):
             # Create curve with this color
             curve = self.plot(self.x, wave, pen=pg.mkPen(wave_color, width=4))
             
-             # Store curve and frequency
+            # Store curve and frequency
             self.wave_curves.append((curve, freq))
+        
+        # Re-enable updates after all curves are created
+        self.setUpdatesEnabled(True)
+
+    def update_superposition_wave(self):
+        """Calculate and update the superposition wave from all individual waves"""
+        if not self.superposition_enabled or not self.white_light or self.superposition_wave is None:
+            return
+            
+        # Start with zeros
+        superposition = np.zeros_like(self.x)
+        
+        # Add all individual waves
+        for curve, freq in self.wave_curves:
+            wave = self.calculate_wave(freq)
+            superposition += wave
+            
+        # Scale the superposition to keep it within reasonable amplitude
+        if len(self.wave_curves) > 0:
+            superposition = superposition / len(self.wave_curves)
+            
+        # Update the superposition wave
+        self.superposition_wave.setData(self.x, superposition)
 
     def update_ray_lines(self):
         """Update the ray lines to visualize refraction angles"""
@@ -1330,6 +1418,35 @@ class WaveSimulationWidget(pg.PlotWidget):
     def update_angle(self, value):
         """Update the angle of incidence"""
         self.angle_of_incidence = value
+        
+        # Update angle labels even when ray mode is not enabled
+        label_html_style = """<div style="font-family: Arial; font-size: 16pt; font-weight: bold; color: white;">"""
+        self.angle1_label.setHtml(f"{label_html_style}θ₁: {self.angle_of_incidence}°</div>")
+        
+        # Calculate refraction angles using Snell's law
+        try:
+            # First boundary: n1*sin(θ1) = n2*sin(θ2)
+            sin_theta2 = self.n1 * np.sin(np.radians(self.angle_of_incidence)) / self.n2
+            
+            if abs(sin_theta2) <= 1.0:  # Check for total internal reflection
+                angle_refraction1_deg = np.degrees(np.arcsin(sin_theta2))
+                self.angle2_label.setHtml(f"{label_html_style}θ₂: {angle_refraction1_deg:.1f}°</div>")
+                
+                # Second boundary: n2*sin(θ2) = n3*sin(θ3)
+                sin_theta3 = self.n2 * np.sin(np.radians(angle_refraction1_deg)) / self.n3
+                
+                if abs(sin_theta3) <= 1.0:  # Check for total internal reflection
+                    angle_refraction2_deg = np.degrees(np.arcsin(sin_theta3))
+                    self.angle3_label.setHtml(f"{label_html_style}θ₃: {angle_refraction2_deg:.1f}°</div>")
+                else:
+                    self.angle3_label.setHtml(f"{label_html_style}θ₃: TIR</div>")
+            else:
+                self.angle2_label.setHtml(f"{label_html_style}θ₂: TIR</div>")
+                self.angle3_label.setHtml(f"{label_html_style}θ₃: N/A</div>")
+        except Exception as e:
+            print(f"Error updating angle labels: {e}")
+        
+        # Update ray lines if ray mode is enabled
         if self.show_ray_mode:
             self.update_ray_lines()
 
@@ -1338,6 +1455,15 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.ray_target_y = y_value
         if self.show_ray_mode:
             self.update_ray_lines()
+
+    def cleanup(self):
+        """Clean up resources to prevent memory leaks"""
+        if hasattr(self, 'timer') and self.timer.isActive():
+            self.timer.stop()
+        
+        # Clear all cached data
+        if hasattr(self, '_wave_calc_cache'):
+            self._wave_calc_cache = {}
 
 class ColoredSlider(QSlider):
     def __init__(self, parent=None):
@@ -1399,22 +1525,29 @@ class LightSimulationApp(QMainWindow):
         
         # Set up the main window
         self.setWindowTitle("Light Wave Simulation")
-        self.setGeometry(100, 100, 1200, 800)
-        
 
-        # Medium presets (refractive indices at ~550nm wavelength)
+        central_widget = QWidget()
+        central_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setCentralWidget(central_widget)
+        self.main_layout = QVBoxLayout(central_widget)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
+        self.main_layout.setSpacing(0)
+
+                # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
-            'Air': {'n': 1.0003, 'color': '#3A3A3A80'},  # Very dark gray with transparency
-            'Water': {'n': 1.33, 'color': '#0D47A1C0'},  # Rich blue with higher opacity
-            'Glass (Crown)': {'n': 1.52, 'color': '#4488AACC'},  # Deep cyan with higher opacity
-            'Glass (Flint)': {'n': 1.62, 'color': '#55AABBCC'},  # Dark cyan with higher opacity
-            'Diamond': {'n': 2.42, 'color': '#331a37C0'},  # Dark teal with higher opacity
-            'Acrylic': {'n': 1.49, 'color': '#1565C0C0'},  # Bright blue with higher opacity
-            'Glycerine': {'n': 1.47, 'color': '#2f2016C0'},  # Light blue with higher opacity
-            'Ethanol': {'n': 1.36, 'color': '#66CCFFCC'},  # Lighter blue with higher opacity
-            'Quartz': {'n': 1.54, 'color': '#200e0eC0'},  # Medium cyan with higher opacity
-            'Sapphire': {'n': 1.77, 'color': '#311B92C0'}  # Deep purple with higher opacity
+            'Air': {'n': 1.0003, 'color': '#22222259'},  # Subtle gray with 35% opacity
+            'Water': {'n': 1.33, 'color': '#1E90FF59'},  # Soft blue with 35% opacity
+            'Glass (Crown)': {'n': 1.52, 'color': '#87CEEB59'},  # Sky blue with 35% opacity
+            'Glass (Flint)': {'n': 1.62, 'color': '#9370DB59'},  # Medium purple with 35% opacity
+            'Diamond': {'n': 2.42, 'color': '#E0E0E059'},  # Light silver with 35% opacity
+            'Acrylic': {'n': 1.49, 'color': '#98FB9859'},  # Pale green with 35% opacity
+            'Glycerine': {'n': 1.47, 'color': '#F0E68C59'},  # Khaki with 35% opacity
+            'Ethanol': {'n': 1.36, 'color': '#D8BFD859'},  # Thistle with 35% opacity
+            'Quartz': {'n': 1.54, 'color': '#DEB88759'},  # Burlywood with 35% opacity
+            'Sapphire': {'n': 1.77, 'color': '#4682B459'}  # Steel blue with 35% opacity
         }
+
+        
         # Preset scenarios
         self.scenario_materials = {
             'Air → Water → Glass': ('Air', 'Water', 'Glass (Crown)'),
@@ -1474,16 +1607,13 @@ class LightSimulationApp(QMainWindow):
             }
         """)
         
-        # Create central widget and main layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        self.main_layout = QVBoxLayout(central_widget)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
-        self.main_layout.setSpacing(0)  # Remove spacing
+  
+ 
         
         # Create wave widget directly (no tabs)
         self.wave_widget = WaveSimulationWidget()
-        self.main_layout.addWidget(self.wave_widget)
+        self.wave_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.main_layout.addWidget(self.wave_widget, 1)
         
         # Create a modern play/pause button
         self.play_pause_button = PlayPauseButton()
@@ -1521,6 +1651,9 @@ class LightSimulationApp(QMainWindow):
         self.wave_widget.medium1_color = self.medium_presets['Air']['color']
         self.wave_widget.medium2_color = self.medium_presets['Water']['color']
         self.wave_widget.medium3_color = self.medium_presets['Glass (Crown)']['color']
+
+        
+        self.showMaximized()
 
     def resizeEvent(self, event):
         """Handle window resize events"""
@@ -1625,11 +1758,19 @@ class LightSimulationApp(QMainWindow):
         self.interference_check = QCheckBox("Show Interference")
         self.interference_check.setChecked(False)
         self.ray_mode_check = QCheckBox("Show Ray Path")
-        
+        self.superposition_check = QCheckBox("Show Components")
+        self.superposition_check.setToolTip("Toggle between showing individual color components or a single superposition wave")
+
+
         mode_layout.addWidget(self.white_light_check)
         mode_layout.addWidget(self.interference_check)
         mode_layout.addWidget(self.ray_mode_check)
+        mode_layout.addWidget(self.superposition_check)
         wave_layout.addLayout(mode_layout)
+
+        self.superposition_check.setEnabled(False)
+        self.white_light_check.stateChanged.connect(self.update_superposition_enabled)
+        self.superposition_check.toggled.connect(self.toggle_superposition)
 
         wave_group.setLayout(wave_layout)
         layout.addWidget(wave_group)
@@ -1660,6 +1801,7 @@ class LightSimulationApp(QMainWindow):
         n1_layout.addWidget(self.n1_slider)
         n1_layout.addWidget(self.n1_value)
         medium1_layout.addLayout(n1_layout)
+        self.medium1_combo.setCurrentText(self.wave_widget.medium1_name)
 
         # Middle group (medium 2)
         medium2_group = QGroupBox("Medium 2")
@@ -1687,6 +1829,8 @@ class LightSimulationApp(QMainWindow):
         n2_layout.addWidget(self.n2_slider)
         n2_layout.addWidget(self.n2_value)
         medium2_layout.addLayout(n2_layout)
+        self.medium2_combo.setCurrentText(self.wave_widget.medium2_name)
+
 
         # Right group (medium 3)
         medium3_group = QGroupBox("Medium 3")
@@ -1714,7 +1858,7 @@ class LightSimulationApp(QMainWindow):
         n3_layout.addWidget(self.n3_slider)
         n3_layout.addWidget(self.n3_value)
         medium3_layout.addLayout(n3_layout)
-        self.medium3_combo.setCurrentText('Glass (Crown)')
+        self.medium3_combo.setCurrentText(self.wave_widget.medium3_name)
         # Scenario presets
         scenario_group = QGroupBox("Presets")
         scenario_layout = QVBoxLayout()
@@ -1749,8 +1893,8 @@ class LightSimulationApp(QMainWindow):
         apply_button.clicked.connect(self.apply_scenario)
 
         self.interference_check.stateChanged.connect(self.toggle_interference)
-        
         self.ray_mode_check.stateChanged.connect(self.toggle_ray_mode)
+        self.superposition_check.stateChanged.connect(self.toggle_superposition)
 
     def toggle_interference(self, state):
         """Toggle interference visualization"""
@@ -1869,7 +2013,17 @@ class LightSimulationApp(QMainWindow):
         """Toggle white light mode"""
         enabled = state == Qt.Checked
         self.wave_widget.toggle_white_light(enabled)
-        
+
+    def update_superposition_enabled(self, state):
+        """Enable superposition checkbox only when white light is enabled"""
+        self.superposition_check.setEnabled(state == Qt.Checked)
+        if state != Qt.Checked:
+            self.superposition_check.setChecked(False)
+            
+    def toggle_superposition(self, state):
+        """Toggle superposition visualization in white light mode"""
+        enabled = state == Qt.Checked
+        self.wave_widget.toggle_superposition(enabled)    
         
     def apply_scenario(self):
         """Apply the selected scenario preset"""
@@ -1903,11 +2057,14 @@ class LightSimulationApp(QMainWindow):
                 self.n3_value.setText(f"{n3:.4f}")
         
     def update_angle(self, value):
-        """Update the angle of incidence"""
-        # Update label
+        """Update the angle value and pass to wave widget"""
         self.angle_value.setText(f"{value}°")
-        # Update angle in wave widget
-        self.wave_widget.angle_of_incidence = value
+        
+        # Update the wave widget's angle
+        self.wave_widget.update_angle(value)
+        
+        # Force an update of the wave visualization
+        self.wave_widget.update_plot()
         # Update ray visualization
         if self.wave_widget.show_ray_mode:
             self.wave_widget.update_ray_lines()
@@ -1926,11 +2083,37 @@ class LightSimulationApp(QMainWindow):
         enabled = state == Qt.Checked
         self.wave_widget.toggle_ray_mode(enabled)
 
-
+    def closeEvent(self, event):
+        """Handle window close event to ensure proper cleanup"""
+        # Stop all timers
+        if hasattr(self.wave_widget, 'timer') and self.wave_widget.timer.isActive():
+            self.wave_widget.timer.stop()
+        
+        # Clear all plot items to release memory
+        if hasattr(self.wave_widget, 'clear'):
+            self.wave_widget.clear()
+        
+        # Delete wave curves explicitly
+        if hasattr(self.wave_widget, 'wave_curves'):
+            for curve_item in self.wave_widget.wave_curves:
+                if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                    curve, _ = curve_item
+                    if hasattr(self.wave_widget, 'removeItem'):
+                        self.wave_widget.removeItem(curve)
+        
+        # Accept the close event
+        event.accept()
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
 
 # Run the application
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    mainWindow = LightSimulationApp()
-    mainWindow.show()
-    sys.exit(app.exec_())
+    window = LightSimulationApp()
+    window.show()
+    app.exec_()
+    # Ensure cleanup happens when application exits
+    if hasattr(window, 'wave_widget') and hasattr(window.wave_widget, 'cleanup'):
+        window.wave_widget.cleanup()
