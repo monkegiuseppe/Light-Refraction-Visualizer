@@ -174,6 +174,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.prism_mode = False
         self.superposition_enabled = False
         self.superposition_wave = None
+        self.show_reflections = False
 
         self.prism_frequencies = np.linspace(400, 790, 10)
         self.prism_wavelengths = [299792.458 / freq for freq in self.prism_frequencies]
@@ -189,7 +190,8 @@ class WaveSimulationWidget(pg.PlotWidget):
         # Create the plot with a transparent background
         self.setBackground(None)  
         self.getPlotItem().setTitle("")  
-        self.getPlotItem().hideAxis('left') 
+        self.getPlotItem().showAxis('left', True)
+        self.getPlotItem().getAxis('left').setLabel('Electric Field', units='V/m') 
         self.getPlotItem().hideAxis('bottom')  
 
         # Configure a thin, visible grid
@@ -219,6 +221,15 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.wave_curves = []   # Initialize wave_curves list
         
 
+        self.reflected_wave1 = self.plot(self.x, np.zeros_like(self.x), 
+                                        pen=pg.mkPen('#00FFFF', width=2, style=Qt.DashLine))
+        self.reflected_wave2 = self.plot(self.x, np.zeros_like(self.x), 
+                                        pen=pg.mkPen('#FFFF00', width=2, style=Qt.DashLine))
+        
+        # Hide reflected waves initially
+        self.reflected_wave1.setVisible(False)
+        self.reflected_wave2.setVisible(False)
+
         # Set up the plot
         self.setAntialiasing(True)
 
@@ -237,6 +248,7 @@ class WaveSimulationWidget(pg.PlotWidget):
             line = pg.InfiniteLine(pos=x, angle=90, pen=pg.mkPen(color=(200, 200, 200, 150), width=0.5, style=Qt.DotLine))
             self.addItem(line)
             self.grid_lines_x.append(line)
+
         # Remove the plot border
         self.getPlotItem().setContentsMargins(0, 0, 0, 0)
         self.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
@@ -252,11 +264,10 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.getPlotItem().getAxis(axis).setStyle(showValues=True, tickLength=5)
                 if axis in ['top', 'right']:
                     self.getPlotItem().showAxis(axis, False)
-        
 
 
         # Set grid line spacing
-        self.getPlotItem().getAxis('left').setTicks([[(i, str(i)) for i in range(-2, 3, 1)]])
+        self.getPlotItem().getAxis('left').setTicks([[(i, f"{int(i*50)} V/m") for i in range(-2, 3, 1)]])
         self.getPlotItem().getAxis('bottom').setTicks([[(i, str(i)) for i in range(0, 3001, 500)]])
 
         # Set up the x-axis
@@ -353,7 +364,6 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.frame_time = 1/60  # Target 60 FPS
         self.skip_frames = 0
 
-
         # Set up the animation timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_animation)
@@ -361,6 +371,7 @@ class WaveSimulationWidget(pg.PlotWidget):
 
         self.update_wavelength_scale()
         
+
     def calculate_interference_waves(self, wavelength):
         """Calculate the component waves that create interference"""
         if not self.show_interference:
@@ -474,7 +485,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Use cache key that includes additional_phase
         cache_key = (frequency, self.time, self.n1, self.n2, self.n3, 
-                     self.amplitude, self.angle_of_incidence, additional_phase)
+                     self.amplitude, self.angle_of_incidence, additional_phase, self.show_reflections)
         
         # Check if we have this calculation cached
         if hasattr(self, '_wave_calc_cache') and cache_key in self._wave_calc_cache:
@@ -505,8 +516,17 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         # Apply proper scaling to amplitude
         scaled_amplitude = self.amplitude * self.visualization_scale * 1.5 
-        
+
+        # Calculate reflection and transmission coefficients
+        angle_rad = np.radians(self.angle_of_incidence)
+        coeffs = self.calculate_reflection_coefficients(angle_rad)
+        # Calculate amplitudes for each medium considering reflections
+
+        A1 = scaled_amplitude  # Initial amplitude
+        A2 = A1 * coeffs['A_t1']  # Amplitude after first boundary
+        A3 = A2 * coeffs['A_t2']  # Amplitude after second boundary
         # Vectorized calculation for each region
+
         mask1 = self.x < self.boundary1
         mask2 = (self.x >= self.boundary1) & (self.x < self.boundary2)
         mask3 = self.x >= self.boundary2
@@ -515,10 +535,10 @@ class WaveSimulationWidget(pg.PlotWidget):
         phase_shift2 = (k1 - k2) * self.boundary1
         phase_shift3 = (k1 - k2) * self.boundary1 + (k2 - k3) * self.boundary2
         
-        # Vectorized calculations (much faster than loops)
-        y[mask1] = scaled_amplitude * np.sin(k1 * self.x[mask1] - phase)
-        y[mask2] = scaled_amplitude * np.sin(k2 * self.x[mask2] - phase + phase_shift2)
-        y[mask3] = scaled_amplitude * np.sin(k3 * self.x[mask3] - phase + phase_shift3)
+        # Vectorized calculations with adjusted amplitudes
+        y[mask1] = A1 * np.sin(k1 * self.x[mask1] - phase)
+        y[mask2] = A2 * np.sin(k2 * self.x[mask2] - phase + phase_shift2)
+        y[mask3] = A3 * np.sin(k3 * self.x[mask3] - phase + phase_shift3)
         
         # Cache the result
         self._wave_calc_cache[cache_key] = y
@@ -533,7 +553,178 @@ class WaveSimulationWidget(pg.PlotWidget):
         
         return y
 
-    
+   
+
+    def calculate_reflected_waves(self):
+        """Calculate reflected waves at each boundary"""
+        if not self.show_reflections:
+            return
+            
+        # Calculate reflection coefficients
+        angle_rad = np.radians(self.angle_of_incidence)
+        coeffs = self.calculate_reflection_coefficients(angle_rad)
+        
+        # Get wavelengths
+        wavelength_nm = 299792.458 / self.frequency
+        wavelength_m1 = wavelength_nm / self.n1
+        wavelength_m2 = wavelength_nm / self.n2
+        
+        # Calculate wave numbers
+        k1 = 2 * np.pi / wavelength_m1
+        k2 = 2 * np.pi / wavelength_m2
+        
+        # Calculate angular frequency
+        omega = 2 * np.pi * self.frequency * (self.speed / 50) / 100
+        phase = omega * self.time
+        
+        # Apply proper scaling to amplitude
+        scaled_amplitude = self.amplitude * self.visualization_scale * 1.5
+        
+        # Calculate reflected wave 1 (from first boundary, only in medium 1)
+        reflected1 = np.zeros_like(self.x)
+        mask1 = self.x < self.boundary1
+        
+        # Amplitude of reflected wave from first boundary
+        A_r1 = scaled_amplitude * abs(coeffs['r1'])
+        
+        # Phase shift for reflection (π phase shift if r1 < 0)
+        phase_shift_r1 = np.pi if coeffs['r1'] < 0 else 0
+        
+        # Calculate reflected wave (traveling in opposite direction)
+        reflected1[mask1] = A_r1 * np.sin(k1 * (2 * self.boundary1 - self.x[mask1]) - phase + phase_shift_r1)
+        
+        # Calculate reflected wave 2 (from second boundary, only in medium 2)
+        reflected2 = np.zeros_like(self.x)
+        mask2 = (self.x >= self.boundary1) & (self.x < self.boundary2)
+        
+        # Amplitude of reflected wave from second boundary
+        # This is the transmitted wave from first boundary that gets reflected at second boundary
+        A_r2 = scaled_amplitude * coeffs['A_t1'] * abs(coeffs['r2'])
+        
+        # Phase shift for reflection (π phase shift if r2 < 0)
+        phase_shift_r2 = np.pi if coeffs['r2'] < 0 else 0
+        
+        # Phase shift from first boundary
+        phase_shift2 = (k1 - k2) * self.boundary1
+        
+        # Calculate reflected wave (traveling in opposite direction)
+        reflected2[mask2] = A_r2 * np.sin(k2 * (2 * self.boundary2 - self.x[mask2]) - phase + phase_shift2 + phase_shift_r2)
+        
+        # Update the reflected wave curves
+        self.reflected_wave1.setData(self.x, reflected1)
+        self.reflected_wave2.setData(self.x, reflected2)
+
+    def toggle_main_wave(self, enabled):
+        """Toggle visibility of the main wave"""
+        if not self.white_light:
+            self.wave_curve.setVisible(enabled)
+        else:
+            # In white light mode, toggle the superposition wave or component waves
+            if self.superposition_enabled:
+                if self.superposition_wave:
+                    self.superposition_wave.setVisible(enabled)
+            else:
+                # Toggle all component waves
+                for curve_item in self.wave_curves:
+                    if isinstance(curve_item, tuple) and len(curve_item) == 2:
+                        curve, _ = curve_item
+                        if hasattr(curve, 'setVisible'):
+                            curve.setVisible(enabled)
+        self.update_plot()
+
+    def toggle_reflections(self, enabled):
+        """Toggle visibility of reflection waves"""
+        self.show_reflections = enabled
+        self.reflected_wave1.setVisible(enabled)
+        self.reflected_wave2.setVisible(enabled)
+        self.update_plot()
+
+    def calculate_energy_density(self, amplitude, refractive_index):
+        """
+        Calculate energy density in each medium
+        Energy density = (1/2) × ε₀ × n × E²
+        Where E is the amplitude (V/m)
+        """
+        # Vacuum permittivity (ε₀) in F/m
+        epsilon_0 = 8.85e-12
+        
+        # Convert our arbitrary amplitude to V/m for energy calculation
+        # Assuming our amplitude of 1.0 corresponds to 100 V/m
+        e_field = amplitude * 100
+        
+        # Calculate energy density in J/m³
+        energy_density = 0.5 * epsilon_0 * refractive_index * (e_field ** 2)
+        
+        return energy_density
+
+    def calculate_reflection_coefficients(self, angle_incidence_rad):
+        """Calculate reflection and transmission coefficients"""
+        # First boundary (medium 1 to medium 2)
+        n1 = self.n1
+        n2 = self.n2
+        
+        # Calculate refraction angle using Snell's law
+        sin_theta_t = (n1 / n2) * np.sin(angle_incidence_rad)
+        # Check for total internal reflection
+        if abs(sin_theta_t) >= 1.0:
+            # Total internal reflection
+            r1 = 1.0
+            t1 = 0.0
+            theta_t1 = 0.0
+        else:
+            theta_t1 = np.arcsin(sin_theta_t)
+            # Calculate reflection coefficient
+            r1 = ((n1 * np.cos(angle_incidence_rad) - n2 * np.cos(theta_t1)) / 
+                 (n1 * np.cos(angle_incidence_rad) + n2 * np.cos(theta_t1)))
+            # Calculate transmission coefficient
+            t1 = (2 * n1 * np.cos(angle_incidence_rad)) / (n1 * np.cos(angle_incidence_rad) + n2 * np.cos(theta_t1))
+        
+        # Second boundary (medium 2 to medium 3)
+        n2 = self.n2
+        n3 = self.n3
+        
+        # Use the refracted angle from first boundary as incident angle for second boundary
+        angle_incidence2_rad = theta_t1
+        
+        # Calculate refraction angle using Snell's law
+        sin_theta_t2 = (n2 / n3) * np.sin(angle_incidence2_rad)
+        # Check for total internal reflection
+        if abs(sin_theta_t2) >= 1.0:
+            # Total internal reflection
+            r2 = 1.0
+            t2 = 0.0
+            theta_t2 = 0.0
+        else:
+            theta_t2 = np.arcsin(sin_theta_t2)
+            # Calculate reflection coefficient
+            r2 = ((n2 * np.cos(angle_incidence2_rad) - n3 * np.cos(theta_t2)) / 
+                 (n2 * np.cos(angle_incidence2_rad) + n3 * np.cos(theta_t2)))
+            # Calculate transmission coefficient
+            t2 = (2 * n2 * np.cos(angle_incidence2_rad)) / (n2 * np.cos(angle_incidence2_rad) + n3 * np.cos(theta_t2))
+        
+        # Calculate transmitted amplitudes
+        if abs(sin_theta_t) < 1.0:
+            A_t1 = t1 * np.sqrt((n2 * np.cos(theta_t1)) / (n1 * np.cos(angle_incidence_rad)))
+        else:
+            A_t1 = 0.0
+            
+        if abs(sin_theta_t2) < 1.0:
+            A_t2 = t2 * np.sqrt((n3 * np.cos(theta_t2)) / (n2 * np.cos(angle_incidence2_rad)))
+        else:
+            A_t2 = 0.0
+            
+        # Calculate final transmitted amplitude through both boundaries
+        A_final = A_t1 * A_t2
+        
+        return {
+            'r1': r1,
+            'r2': r2,
+            't1': t1,
+            't2': t2,
+            'A_t1': A_t1,
+            'A_t2': A_t2
+        }
+
     def update_animation(self):
         """Update the animation for each timer tick"""
         # Implement frame skipping for performance
@@ -559,6 +750,7 @@ class WaveSimulationWidget(pg.PlotWidget):
                 'time': self.time - 1,  # Force initial update
                 'white_light': self.white_light,
                 'show_interference': self.show_interference,
+                'show_reflections': self.show_reflections,
                 'frequency': self.frequency,
                 'n1': self.n1,
                 'n2': self.n2,
@@ -571,6 +763,7 @@ class WaveSimulationWidget(pg.PlotWidget):
         if (abs(self._prev_state['time'] - self.time) > 0.009 or
             self._prev_state['white_light'] != self.white_light or
             self._prev_state['show_interference'] != self.show_interference or
+            self._prev_state['show_reflections'] != self.show_reflections or
             self._prev_state['frequency'] != self.frequency or
             self._prev_state['superposition_enabled'] != self.superposition_enabled or
             abs(self._prev_state['n1'] - self.n1) > 0.0001 or
@@ -640,11 +833,16 @@ class WaveSimulationWidget(pg.PlotWidget):
                 self.interference_wave1.setData(reduced_x, wave1)
                 self.interference_wave2.setData(reduced_x, wave2)
             
+             # Update reflected waves if enabled
+            if self.show_reflections:
+                self.calculate_reflected_waves()
+
             # Update previous state
             self._prev_state = {
                 'time': self.time,
                 'white_light': self.white_light,
                 'show_interference': self.show_interference,
+                'show_reflections': self.show_reflections,
                 'frequency': self.frequency,
                 'n1': self.n1,
                 'n2': self.n2,
@@ -770,10 +968,11 @@ class WaveSimulationWidget(pg.PlotWidget):
             
             # Update medium rectangles instead of recreating them
             self._update_medium_rectangles()
-            
             # Update medium labels
-            self._update_medium_labels()
-            
+            self._update_medium_labels() 
+            # Update energy display
+            self.update_energy_display()
+
             # Update the wave curve with current parameters
             if not self.white_light:
                 # Get color from wavelength
@@ -968,6 +1167,56 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.grid_value_labels[wavelength_idx+2].setText(f"λ₂ = {int(wavelength_m2)} nm | v₂ = {speed_m2_formatted}")
         self.grid_value_labels[wavelength_idx+3].setText(f"λ₃ = {int(wavelength_m3)} nm | v₃ = {speed_m3_formatted}")
 
+    def update_energy_display(self):
+        """Calculate and display energy in each medium"""
+        # Get reflection coefficients
+        angle_rad = np.radians(self.angle_of_incidence)
+        coeffs = self.calculate_reflection_coefficients(angle_rad)
+        
+        # Calculate initial energy density in medium 1
+        initial_energy = self.calculate_energy_density(self.amplitude, self.n1)
+        
+        # Calculate energy after first boundary (transmitted to medium 2)
+        # Energy is proportional to amplitude squared
+        transmitted_energy1 = initial_energy * (coeffs['A_t1'] ** 2)
+        
+        # Calculate energy after second boundary (transmitted to medium 3)
+        transmitted_energy2 = transmitted_energy1 * (coeffs['A_t2'] ** 2)
+        
+        # Calculate reflected energy at first boundary
+        reflected_energy1 = initial_energy * (coeffs['r1'] ** 2)
+        
+        # Calculate reflected energy at second boundary (back into medium 2)
+        reflected_energy2 = transmitted_energy1 * (coeffs['r2'] ** 2)
+        
+        # Calculate percentages
+        if initial_energy > 0:
+            transmitted_percent1 = (transmitted_energy1 / initial_energy) * 100
+            transmitted_percent2 = (transmitted_energy2 / initial_energy) * 100
+            reflected_percent1 = (reflected_energy1 / initial_energy) * 100
+            reflected_percent2 = (reflected_energy2 / initial_energy) * 100
+        else:
+            transmitted_percent1 = transmitted_percent2 = reflected_percent1 = reflected_percent2 = 0
+        
+        # Format for display with improved visibility
+        energy_html = f"""
+        <div style='background-color: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; border: 1px solid #3498db;'>
+            <div style='color: #3498db; font-size: 16px; font-weight: bold; margin-bottom: 5px;'>Energy Analysis</div>
+            <div style='color: white; font-size: 14px;'>
+                <span style='color: #2ecc71;'>Medium 1 → 2:</span> {transmitted_percent1:.1f}% transmitted, <span style='color: #e74c3c;'>{reflected_percent1:.1f}% reflected</span><br>
+                <span style='color: #2ecc71;'>Medium 2 → 3:</span> {transmitted_percent2:.1f}% transmitted, <span style='color: #e74c3c;'>{reflected_percent2:.1f}% reflected</span>
+            </div>
+        </div>
+        """
+        
+        # Update external label if available
+        if hasattr(self, 'external_energy_label') and self.external_energy_label is not None:
+            self.external_energy_label.setText(energy_html)
+            # Remove the plot item if it exists
+            if hasattr(self, 'energy_label') and self.energy_label is not None:
+                self.removeItem(self.energy_label)
+                self.energy_label = None
+
     def update_wavelength(self, value):
         """Update the wavelength and colors"""
         self.frequency = value
@@ -1088,6 +1337,10 @@ class WaveSimulationWidget(pg.PlotWidget):
         self.prism_mode = enabled
         self.update_plot()
         
+    def set_energy_label(self, label):
+        """Set external label for energy analysis display"""
+        self.external_energy_label = label
+
     def toggle_white_light(self, enabled):
         """Toggle white light mode"""
         self.white_light = enabled
@@ -1696,21 +1949,21 @@ class LightSimulationApp(QMainWindow):
         central_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
+        self.main_layout.setContentsMargins(0, 0, 0, 0) 
         self.main_layout.setSpacing(0)
 
-                # Medium presets (refractive indices at ~550nm wavelength)
+        # Medium presets (refractive indices at ~550nm wavelength)
         self.medium_presets = {
-            'Air': {'n': 1.0003, 'color': '#22222259'},  # Subtle gray with 35% opacity
-            'Water': {'n': 1.33, 'color': '#1E90FF59'},  # Soft blue with 35% opacity
-            'Glass (Crown)': {'n': 1.52, 'color': '#87CEEB59'},  # Sky blue with 35% opacity
-            'Glass (Flint)': {'n': 1.62, 'color': '#9370DB59'},  # Medium purple with 35% opacity
-            'Diamond': {'n': 2.42, 'color': '#E0E0E059'},  # Light silver with 35% opacity
-            'Acrylic': {'n': 1.49, 'color': '#98FB9859'},  # Pale green with 35% opacity
-            'Glycerine': {'n': 1.47, 'color': '#F0E68C59'},  # Khaki with 35% opacity
-            'Ethanol': {'n': 1.36, 'color': '#D8BFD859'},  # Thistle with 35% opacity
-            'Quartz': {'n': 1.54, 'color': '#DEB88759'},  # Burlywood with 35% opacity
-            'Sapphire': {'n': 1.77, 'color': '#4682B459'}  # Steel blue with 35% opacity
+            'Air': {'n': 1.0003, 'color': '#22222259'}, 
+            'Water': {'n': 1.33, 'color': '#1E90FF59'},  
+            'Glass (Crown)': {'n': 1.52, 'color': '#87CEEB59'}, 
+            'Glass (Flint)': {'n': 1.62, 'color': '#9370DB59'}, 
+            'Diamond': {'n': 2.42, 'color': '#E0E0E059'},  
+            'Acrylic': {'n': 1.49, 'color': '#98FB9859'}, 
+            'Glycerine': {'n': 1.47, 'color': '#F0E68C59'}, 
+            'Ethanol': {'n': 1.36, 'color': '#D8BFD859'},  
+            'Quartz': {'n': 1.54, 'color': '#DEB88759'}, 
+            'Sapphire': {'n': 1.77, 'color': '#4682B459'}  
         }
 
         
@@ -1781,26 +2034,62 @@ class LightSimulationApp(QMainWindow):
         self.wave_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.main_layout.addWidget(self.wave_widget, 1)
         
+        # Create a container for the buttons below the simulation
+        buttons_container = QWidget()
+        buttons_layout = QHBoxLayout(buttons_container)
+        buttons_layout.setContentsMargins(10, 5, 10, 5)
+
+        # Create energy analysis label
+        self.energy_analysis_label = QLabel()
+        self.energy_analysis_label.setStyleSheet("""
+            background-color: rgba(0,0,0,0.8);
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #3498db;
+            color: white;
+        """)
+        self.energy_analysis_label.setMinimumWidth(300)
+        self.energy_analysis_label.setMinimumHeight(60)
+        self.energy_analysis_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        # Left side container for the ModernCheckBox buttons
+        left_buttons = QWidget()
+        left_buttons_layout = QVBoxLayout(left_buttons)
+        left_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        left_buttons_layout.setSpacing(5)
+
+        # Create the two ModernCheckBox buttons
+        self.main_wave_check = ModernCheckBox("Show Main Wave")
+        self.main_wave_check.setChecked(True)
+        self.main_wave_check.toggled.connect(self.toggle_main_wave)
+        
+        self.reflections_check = ModernCheckBox("Show Reflections")
+        self.reflections_check.setChecked(False)
+        self.reflections_check.toggled.connect(self.toggle_reflections)
+        
+        # Add the checkboxes to the left side layout
+        left_buttons_layout.addWidget(self.main_wave_check)
+        left_buttons_layout.addWidget(self.reflections_check)
         # Create a modern play/pause button
         self.play_pause_button = PlayPauseButton()
         self.play_pause_button.clicked.connect(self.toggle_animation)
 
-        # Add the button to a centered container at the bottom of the plot
-        button_container = QWidget()
-        button_layout = QHBoxLayout(button_container)
-        button_layout.addStretch(1)
-        button_layout.addWidget(self.play_pause_button)
-        button_layout.addStretch(1)
-        button_layout.setContentsMargins(0, 5, 0, 5)
+
+        buttons_layout.addWidget(left_buttons, 0)  # Left-aligned
+        buttons_layout.addWidget(self.energy_analysis_label, 0, Qt.AlignLeft)
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(self.play_pause_button, 0, Qt.AlignCenter)  # Center-aligned
+        buttons_layout.addStretch(2)
 
   
-        self.main_layout.addWidget(button_container)
-        
+        self.main_layout.addWidget(buttons_container)
+
  
         self.wave_widget.setContextMenuPolicy(Qt.NoContextMenu)
+
         # Share medium presets with the wave widget
         self.wave_widget.medium_presets = self.medium_presets
-        
+
         # Create controls container
         controls_container = QWidget()
         controls_container.setMaximumHeight(200)  # Limit height
@@ -1809,16 +2098,17 @@ class LightSimulationApp(QMainWindow):
         controls_layout.setSpacing(10)  # Add spacing between controls
         controls_container.setLayout(controls_layout)
         self.main_layout.addWidget(controls_container)
+
         
+        self.wave_widget.set_energy_label(self.energy_analysis_label)
+
         # Add wave controls
         self.setup_wave_controls(controls_layout)
-
-
+        
         self.wave_widget.medium1_color = self.medium_presets['Air']['color']
         self.wave_widget.medium2_color = self.medium_presets['Water']['color']
         self.wave_widget.medium3_color = self.medium_presets['Glass (Crown)']['color']
-
-        
+        self.wave_widget.toggle_main_wave(True)
         self.showMaximized()
 
     def resizeEvent(self, event):
@@ -1832,6 +2122,17 @@ class LightSimulationApp(QMainWindow):
         paused = self.play_pause_button.isChecked()
         self.wave_widget.toggle_pause(paused)
         self.play_pause_button.update_icon(paused)
+
+
+    def toggle_main_wave(self, enabled):
+        """Toggle visibility of the main wave"""
+        if hasattr(self.wave_widget, 'toggle_main_wave'):
+            self.wave_widget.toggle_main_wave(enabled)
+    
+    def toggle_reflections(self, enabled):
+        """Toggle visibility of reflection waves"""
+        if hasattr(self.wave_widget, 'toggle_reflections'):
+            self.wave_widget.toggle_reflections(enabled)
      
     def setup_wave_controls(self, layout):
         # Left controls group (wave properties)
@@ -1864,7 +2165,7 @@ class LightSimulationApp(QMainWindow):
         
         # Amplitude slider
         amplitude_layout = QHBoxLayout()
-        amplitude_label = QLabel("Amplitude:")
+        amplitude_label = QLabel("Brightness/Amplitude:")
         self.amplitude_slider = BlueSlider()
         self.amplitude_slider.setMinimum(1)
         self.amplitude_slider.setMaximum(10)
@@ -2105,24 +2406,28 @@ class LightSimulationApp(QMainWindow):
         n = value / 100
         self.n1_value.setText(f"{n:.4f}")
         self.wave_widget.update_n1(n)
-  
-        
+        self.wave_widget.update_plot()
+        if self.wave_widget.show_ray_mode:
+            self.wave_widget.update_ray_lines()
+            
     def update_n2(self, value):
         """Update refractive index of medium 2"""
         n = value / 100
         self.n2_value.setText(f"{n:.4f}")
         self.wave_widget.update_n2(n)
+        self.wave_widget.update_plot()
+        if self.wave_widget.show_ray_mode:
+            self.wave_widget.update_ray_lines()
 
-        
     def update_n3(self, value):
         """Update refractive index of medium 3"""
         n = value / 100
         self.n3_value.setText(f"{n:.4f}")
         self.wave_widget.update_n3(n)
+        self.wave_widget.update_plot()
+        if self.wave_widget.show_ray_mode:
+            self.wave_widget.update_ray_lines()
 
-
- 
-        
     def update_medium1(self, medium_name):
         """Update medium 1 selection"""
         if medium_name in self.medium_presets:
