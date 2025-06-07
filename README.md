@@ -1,6 +1,5 @@
 # Animated Interactive Light Refraction Visualizer
 Interactive Light Refraction Visualizer
-Note: use python version, C++ port is purely experimental
 
 ![image](https://github.com/user-attachments/assets/696e2720-932a-415d-b571-a5f418c0018e)
 
